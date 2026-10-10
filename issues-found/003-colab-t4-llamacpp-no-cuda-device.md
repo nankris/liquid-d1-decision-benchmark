@@ -29,3 +29,9 @@
 
 ## Fix
 Download cudart archive and link libs, set LD_LIBRARY_PATH, pip nvidia-*-cu12 fallback in a private dir, run server from its own dir, JIT cache + longer first-start timeouts, full diagnostics, fail fast, source build opt-in (`BUILD_FROM_SOURCE=1`).
+
+## Second T4 run (10 Oct, ~5:55-6:05 PM IST): CUDA fixed, offload check too strict
+- CUDA fix worked: `CUDA0: Tesla T4 (14912 MiB, 14807 MiB free)`; both GGUFs passed SHA-256; datasets loaded.
+- d1 server loaded (`decision model type: lfm2-d1`, listening) but the run aborted: b11541 at default verbosity does not print `offloaded N/N layers to GPU`, so the strict check from the code review (002 #5) had nothing to match.
+- Fix: if the log line is absent, verify full offload by GPU memory growth >= 90% of the GGUF file size; record which method was used (`offload_check`).
+- Monitoring lesson: Colab output lives in an iframe; the first status checks missed the traceback, so the failed runtime sat idle a few minutes before deletion. ~10-12 min of T4 used.

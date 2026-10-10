@@ -805,8 +805,14 @@ def wait_until_loaded(proc, log_path, timeout=LOAD_TIMEOUT_S):
 OFFLOAD_RE = re.compile(r"offloaded\s+(\d+)\s*/\s*(\d+)\s+layers\s+to\s+GPU", re.IGNORECASE)
 
 
-def check_full_offload(log_path, timeout=10):
-    """Return (offloaded, total) from the llama-server log. Raises unless every layer is on the GPU."""
+def check_full_offload(log_path, timeout=10, model_path=None, mem_before=None):
+    """Verify every layer is on the GPU.
+
+    Older llama.cpp builds log 'offloaded N/N layers to GPU'. Build b11541 at default verbosity
+    does not print that line (seen on Colab T4, issue 004), so fall back to a GPU-memory check:
+    with full offload the GPU must hold at least ~90% of the GGUF file's size. A partial offload
+    would leave most weights in system RAM and fail this check.
+    Returns (offloaded, total, method)."""
     deadline = time.time() + timeout
     match = None
     while time.time() < deadline:
@@ -815,17 +821,27 @@ def check_full_offload(log_path, timeout=10):
             match = matches[-1]
             break
         time.sleep(0.5)
-    if not match:
+    if match:
+        offloaded, total = int(match[0]), int(match[1])
+        if offloaded != total or total == 0:
+            raise RuntimeError(
+                f"only {offloaded}/{total} layers are on the GPU; this benchmark requires full offload. Aborting."
+            )
+        return offloaded, total, "log"
+    if model_path is not None and mem_before is not None:
+        file_mib = Path(model_path).stat().st_size / (1024 * 1024)
+        delta = gpu_mem_mib() - mem_before
+        print(f"offload check: no offload line in log; GPU memory +{delta} MiB vs model file {file_mib:.0f} MiB", flush=True)
+        if delta >= 0.9 * file_mib:
+            return None, None, f"gpu_mem_delta {delta} MiB >= 90% of {file_mib:.0f} MiB file"
         raise RuntimeError(
-            "llama-server log has no 'offloaded N/N layers to GPU' line, so full GPU offload "
-            "cannot be verified. Aborting.\n" + log_text(log_path)[-2500:]
+            f"GPU memory grew only {delta} MiB for a {file_mib:.0f} MiB model, so the model is not fully "
+            "on the GPU. Aborting.\n" + log_text(log_path)[-2500:]
         )
-    offloaded, total = int(match[0]), int(match[1])
-    if offloaded != total or total == 0:
-        raise RuntimeError(
-            f"only {offloaded}/{total} layers are on the GPU; this benchmark requires full offload. Aborting."
-        )
-    return offloaded, total
+    raise RuntimeError(
+        "llama-server log has no 'offloaded N/N layers to GPU' line, so full GPU offload "
+        "cannot be verified. Aborting.\n" + log_text(log_path)[-2500:]
+    )
 
 
 _SERVER_STARTS = {"n": 0}
@@ -862,14 +878,14 @@ def start_server(binary, env, model_path, alias, n_slots):
             print(f"start with -fa {flash} failed: {exc}", flush=True)
             continue
         try:
-            offloaded, total = check_full_offload(log_path)
+            offloaded, total, offload_method = check_full_offload(log_path, model_path=model_path, mem_before=mem_before)
         except Exception:
             stop_server(proc)
             log_handle.close()
             raise
         mem_after = gpu_mem_mib()
         print(
-            f"server ready (-fa {flash}, -np {n_slots}), offloaded {offloaded}/{total} layers, "
+            f"server ready (-fa {flash}, -np {n_slots}), offload verified via {offload_method} ({offloaded}/{total} layers), "
             f"GPU memory used {mem_after} MiB (+{mem_after - mem_before} MiB)",
             flush=True,
         )
@@ -882,6 +898,7 @@ def start_server(binary, env, model_path, alias, n_slots):
             "ctx_size_total": CTX_PER_SLOT * n_slots,
             "offloaded_layers": offloaded,
             "total_layers": total,
+            "offload_check": offload_method,
             "gpu_mem_before_mib": mem_before,
             "gpu_mem_used_after_load_mib": mem_after,
             "gpu_mem_delta_mib": mem_after - mem_before,
