@@ -14,7 +14,7 @@ I tested **Liquid AI's d1-3B "decision model"** (open weights, released Oct 2026
 | Review stars (1-5) | **70.5%** (97% within 1 star) | 49.5% | 56.0% |
 
 - **Accuracy:** d1 clearly beats the same-size chat model on 3 of 4 tasks (95% bootstrap CIs don't overlap) and ties on toxicity. d1 and Qwen got zero training examples; TF-IDF was trained on each dataset.
-- **Calibration:** d1's probabilities are honest. Spam ECE 0.014 vs Qwen 0.130; decisions with p<0.2 or p>0.8 (96% of them) were 97.4% correct.
+- **Calibration:** d1's probabilities are honest. Spam ECE 0.014 vs Qwen 0.130 (5-bin ECE on P(spam), as in the calibration chart; `summary.csv` reports a different, top-label ECE); decisions with p<0.2 or p>0.8 (96% of them) were 97.4% correct.
 - **Latency (CPU):** no speed win on a laptop-class CPU. Median d1 vs Qwen: 256 vs 207 ms (spam), 257 vs 284 ms (toxicity), 481 vs 307 ms (routing), 573 vs 991 ms (stars). Five questions in one call cost 2.6x one question, not 5x.
 - **Cost (projection, not a bill):** at Liquid's list price ($0.04 / 1M input tokens) about **$0.003-0.009 per 1,000 decisions**: ~64-145x cheaper than frontier chat models, but only ~3.5x cheaper than budget chat models.
 - **Not tested yet:** Liquid's hosted API (no key) and GPU speed (Colab run coming; results will be added here).
