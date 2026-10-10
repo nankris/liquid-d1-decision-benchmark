@@ -1,4 +1,50 @@
-# d1 decision-model experiments
+# Liquid d1 vs a same-size chat LLM: 800 real decisions
+
+I tested **Liquid AI's d1-3B "decision model"** (open weights, released Oct 2026) against **Qwen2.5-3B-Instruct** (a general chat model of the same size) and a classic **TF-IDF + logistic regression** baseline on four everyday decision tasks. Everything ran locally on an 8-thread CPU, 4-bit quantized, with every call logged.
+
+![Summary](images/hero.png)
+
+## TL;DR
+
+| Task (200 held-out items each) | d1-3B | Qwen2.5-3B | TF-IDF + LR (trained) |
+|---|---|---|---|
+| Spam | **96.5%** | 88.5% | 90.0% |
+| Toxicity | 81.0% | 79.0% | 79.5% |
+| Ticket routing | 98.5% | 60.0% (85.5% with team-name prompt) | **99.5%** |
+| Review stars (1-5) | **70.5%** (97% within 1 star) | 49.5% | 56.0% |
+
+- **Accuracy:** d1 clearly beats the same-size chat model on 3 of 4 tasks (95% bootstrap CIs don't overlap) and ties on toxicity. d1 and Qwen got zero training examples; TF-IDF was trained on each dataset.
+- **Calibration:** d1's probabilities are honest. Spam ECE 0.014 vs Qwen 0.130; decisions with p<0.2 or p>0.8 (96% of them) were 97.4% correct.
+- **Latency (CPU):** no speed win on a laptop-class CPU. Median d1 vs Qwen: 256 vs 207 ms (spam), 257 vs 284 ms (toxicity), 481 vs 307 ms (routing), 573 vs 991 ms (stars). Five questions in one call cost 2.6x one question, not 5x.
+- **Cost (projection, not a bill):** at Liquid's list price ($0.04 / 1M input tokens) about **$0.003-0.009 per 1,000 decisions**: ~64-145x cheaper than frontier chat models, but only ~3.5x cheaper than budget chat models.
+- **Not tested yet:** Liquid's hosted API (no key) and GPU speed (Colab run coming; results will be added here).
+
+## Charts
+
+| | |
+|---|---|
+| ![Accuracy](images/accuracy_by_task.png) | ![Calibration](images/reliability.png) |
+| ![Routing confusion](images/confusion_routing.png) | ![Stars](images/rating_scatter.png) |
+| ![Latency](images/latency.png) | ![Multi-question](images/multiq.png) |
+| ![Confidence](images/confidence_hist.png) | ![Cost](images/cost_per_1k.png) |
+
+## Repo layout
+
+- `harness/` - data prep, model clients (d1 local/hosted, Qwen, TF-IDF), runner, charts, cost projection, tests
+- `data/` - the exact 200-item eval sets and training splits (from public datasets)
+- `results/` - `summary.csv/json`, `per_item.csv`, `cost_projection.csv`, and `raw/` with every model call
+- `images/` - charts and terminal screenshots
+- `colab/` - GPU speed-test assets
+- `PENDING_HOSTED.md` - how to run against Liquid's hosted API
+
+## Honest caveats
+
+- One run, 200 items per task, 4-bit quantized models on CPU. Your numbers will differ.
+- Qwen is scored from its answer's token probabilities; a letter-option prompt hurt it on routing, so a fairer team-name prompt is reported too.
+- Chat-model cost projections reuse Qwen token counts and ignore reasoning tokens, so they are a lower bound.
+- d1 weights are under Liquid's LFM Open License; check it before commercial use.
+
+## Reproduce
 
 A sequential CPU evaluation harness comparing Liquid d1-3B, Qwen2.5-3B-Instruct and a TF-IDF/logistic-regression baseline on spam, offensive tweets, customer routing and review ratings. Both local neural models use Q4_K_M quantization. Hosted clients are implemented but are not needed for local experiments.
 
@@ -105,3 +151,7 @@ Base URL overrides: `D1_LOCAL_BASE_URL`, `QWEN_LOCAL_BASE_URL`, `LIQUID_BASE_URL
 ```bash
 python3 -m unittest discover -s harness -p 'test_*.py' -v
 ```
+
+
+---
+Written up on the *Tech in General* Substack: https://nandigamharikrishna.substack.com
