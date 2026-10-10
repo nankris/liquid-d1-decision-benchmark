@@ -3,21 +3,37 @@
 
 Same spam and routing prompts as harness/tasks.py (the routing label is
 SUBSCRIPTION, not NEWSLETTER) and the same multi-question set as
-harness/multiq.py. Measures HTTP latency and throughput at parallelism
-1 and 4.
+harness/multiq.py. Measures end-to-end HTTP latency, throughput and
+accuracy at concurrency 1 and 4.
 
-Inference is llama.cpp llama-server b11541 with CUDA, all layers on the
-GPU (-ngl all) and 4 slots (-np 4). d1 is POST /v1/systemone. Qwen is
-POST /v1/chat/completions at temperature 0 and max_tokens 4, without
-logprobs (this run is latency-focused). Prompt cache is off so each
-call pays a full prefill.
+This measures application-level performance of each model as served by
+llama-server (d1's /v1/systemone vs Qwen's chat completions), not the
+efficiency of either architecture in isolation. The two requests differ
+in prompt length and in server-side work.
+
+Inference is llama.cpp llama-server b11541 with CUDA. Every server start
+must report full offload ("offloaded N/N layers to GPU") or the run
+aborts. Concurrency 1 runs on a server started with -np 1, concurrency 4
+on a server restarted with -np 4 (2048 context tokens per slot in both).
+d1 is POST /v1/systemone. Qwen is POST /v1/chat/completions with the CPU
+harness body (temperature 0, max_tokens 4, logprobs with top_logprobs 20);
+its prediction is scored exactly like harness/models.py (first-token
+probability mass over the valid answer tokens), with a normalized text
+parse as a cross-check. Prompt cache is off so each call pays a full
+prefill.
+
+Two repetitions alternate model order (rep 1: d1 then Qwen on all 200
+items per task; rep 2: Qwen then d1 on a seeded 100-item subset per task).
+Each server start gets 5 warmup requests that are not measured.
 
 The notebook colab/d1_gpu_speed.ipynb embeds this file as its main cell.
 Its last cell disconnects the Colab runtime. This script does not.
 
-Upload colab/d1data.zip to /content/d1data.zip before running on Colab.
+colab/d1data.zip is downloaded from the GitHub repo into /content when it
+is not already there.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -50,20 +66,50 @@ LLAMA_RELEASE = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA
 CUDA_BIN_URL = f"{LLAMA_RELEASE}/llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"
 CUDA_LIBS_URL = f"{LLAMA_RELEASE}/cudart-llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"
 
-D1_URL = "https://huggingface.co/LiquidAI/d1-3B-GGUF/resolve/main/d1-3B-Q4_K_M.gguf"
-QWEN_URL = "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
-D1_NAME = "d1-3B-Q4_K_M.gguf"
-QWEN_NAME = "qwen2.5-3b-instruct-q4_k_m.gguf"
-QWEN_MODEL_ID = "Qwen2.5-3B-Instruct"
+# Hugging Face files pinned to a commit. sha256 and size are the LFS values
+# from https://huggingface.co/api/models/<repo>?blobs=true at that commit
+# (resolved 2026-10-10). Downloads are verified against them.
+MODELS = {
+    "d1-3B": {
+        "repo": "LiquidAI/d1-3B-GGUF",
+        "revision": "bb1e436ea78eb96a3f1acb6da865f70c2fbeb563",
+        "file": "d1-3B-Q4_K_M.gguf",
+        "sha256": "16aff27ea2eefdc32b9897f43854a5d3170c1dc8dccb9c756905af30a4e22402",
+        "bytes": 1674456672,
+        "alias": "d1-3B",
+    },
+    "qwen2.5-3b-instruct": {
+        "repo": "Qwen/Qwen2.5-3B-Instruct-GGUF",
+        "revision": "7dabda4d13d513e3e842b20f0d435c732f172cbe",
+        "file": "qwen2.5-3b-instruct-q4_k_m.gguf",
+        "sha256": "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
+        "bytes": 2104932768,
+        "alias": "Qwen2.5-3B-Instruct",
+    },
+}
+for _spec in MODELS.values():
+    _spec["url"] = f"https://huggingface.co/{_spec['repo']}/resolve/{_spec['revision']}/{_spec['file']}"
+QWEN_MODEL_ID = MODELS["qwen2.5-3b-instruct"]["alias"]
+KIND_TO_MODEL = {"d1": "d1-3B", "qwen": "qwen2.5-3b-instruct"}
+
+DATA_ZIP_URL = "https://raw.githubusercontent.com/nankris/liquid-d1-decision-benchmark/main/colab/d1data.zip"
 
 HOST = "127.0.0.1"
 PORT = 8081
-N_PARALLEL_SLOTS = 4
-CTX_SIZE = 8192  # total KV pool; llama-server divides it across the 4 slots
-MIN_GPU_MIB = 400
+CTX_PER_SLOT = 2048  # -c is CTX_PER_SLOT * -np, so each slot gets the same context
+CONCURRENCIES = (1, 4)  # server is started with -np equal to the concurrency
+QWEN_MAX_TOKENS = 4  # same as harness/models.py
+QWEN_TOP_LOGPROBS = 20  # same as harness/models.py
+WARMUP_REQUESTS = 5
+SEED = 42
+REP2_ITEMS = 100
+REP2_ITEMS_SHORT = 50
+REP2_SHRINK_AFTER_S = 14 * 60
+REP2_SKIP_AFTER_S = 19 * 60
 MULTIQ_FULL = 30
 MULTIQ_SHORT = 10
-MULTIQ_CUTOFF_S = 15 * 60
+MULTIQ_CUTOFF_S = 12 * 60
+MULTIQ_KS = (1, 2, 3, 5)
 
 # Copied verbatim from harness/tasks.py. Do not swap SUBSCRIPTION for NEWSLETTER.
 CATEGORIES = {
@@ -80,21 +126,6 @@ CATEGORIES = {
     "SHIPPING": "setting up or changing the shipping address",
 }
 SYSTEM = "You are a careful classifier. Reply with only the answer token, nothing else."
-
-WHEEL_TAGS = (
-    (13, 2, "cu132"),
-    (13, 0, "cu130"),
-    (12, 5, "cu125"),
-    (12, 4, "cu124"),
-    (12, 3, "cu123"),
-    (12, 2, "cu122"),
-    (12, 1, "cu121"),
-    (11, 8, "cu118"),
-)
-CMAKE_FALLBACK = (
-    'CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=75" '
-    "pip install llama-cpp-python --no-binary llama-cpp-python"
-)
 
 
 @dataclass(frozen=True)
@@ -236,6 +267,17 @@ def remote_size(url):
     return size
 
 
+def sha256_file(path: Path, chunk=8 * 1024 * 1024):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            block = handle.read(chunk)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def download(url, dest: Path, min_bytes=1):
     dest.parent.mkdir(parents=True, exist_ok=True)
     expected = remote_size(url)
@@ -351,60 +393,6 @@ def gpu_mem_mib():
     return int(out.strip().splitlines()[0])
 
 
-def wheel_tag(cuda):
-    for major, minor, tag in WHEEL_TAGS:
-        if cuda >= (major, minor):
-            return tag
-    return "cu124"
-
-
-def binding_has_cuda():
-    code = (
-        "import llama_cpp\n"
-        "print('yes' if llama_cpp.llama_supports_gpu_offload() else 'no')\n"
-    )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    return result.returncode == 0 and result.stdout.strip().endswith("yes")
-
-
-def pip_install(args):
-    cmd = [sys.executable, "-m", "pip", "install", *args]
-    result = run(cmd, capture_output=True, text=True)
-    combined = (result.stdout or "") + (result.stderr or "")
-    if result.returncode != 0 and "externally-managed-environment" in combined:
-        result = run(cmd + ["--break-system-packages"], capture_output=True, text=True)
-        combined = (result.stdout or "") + (result.stderr or "")
-    return result.returncode, combined[-2000:]
-
-
-def install_python_wheel(cuda):
-    """Best-effort prebuilt CUDA wheel. The timed runs use llama-server, which
-    is the binary that exposes /v1/systemone. --only-binary avoids a source
-    build that would blow the 20 minute budget."""
-    if binding_has_cuda():
-        print("llama-cpp-python CUDA wheel already importable; not reinstalling", flush=True)
-        return {"installed": True, "detail": "already importable with GPU offload"}
-    tag = wheel_tag(cuda)
-    # Primary index is the CUDA wheel index so pip does not prefer the PyPI CPU wheel.
-    # PyPI stays as an extra index for the package's dependencies.
-    url = f"https://abetlen.github.io/llama-cpp-python/whl/{tag}"
-    code, tail = pip_install(
-        [
-            "-q", "llama-cpp-python", "--only-binary=llama-cpp-python",
-            "--index-url", url, "--extra-index-url", "https://pypi.org/simple",
-        ]
-    )
-    if code != 0 or not binding_has_cuda():
-        print("llama-cpp-python CUDA wheel was not installed.", flush=True)
-        print("The speed test still uses the llama-server CUDA binary (systemone + -np 4).", flush=True)
-        print("Source-build fallback, only if you need the Python binding (often >10 min):", flush=True)
-        print("  " + CMAKE_FALLBACK, flush=True)
-        if tail:
-            print(tail[-800:], flush=True)
-        return {"installed": False, "wheel": tag, "detail": "no usable prebuilt wheel", "fallback": CMAKE_FALLBACK}
-    print(f"installed llama-cpp-python CUDA wheel ({tag}); benchmark uses llama-server", flush=True)
-    return {"installed": True, "wheel": tag, "detail": "prebuilt wheel"}
-
 
 def list_devices(binary, env):
     try:
@@ -496,7 +484,8 @@ def locate_zip():
         if not path.is_file():
             import urllib.request
             try:
-                urllib.request.urlretrieve("https://raw.githubusercontent.com/nankris/liquid-d1-decision-benchmark/main/colab/d1data.zip", path)
+                print(f"downloading {DATA_ZIP_URL}", flush=True)
+                urllib.request.urlretrieve(DATA_ZIP_URL, path)
             except Exception as exc:
                 print("auto-download failed:", exc)
         if not path.is_file():
@@ -534,16 +523,25 @@ def extract_eval_zip(zip_path: Path, dest: Path):
             with archive.open(member) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out)
     rows = {}
+    meta = {"zip": {"path": str(zip_path), "sha256": sha256_file(zip_path), "bytes": zip_path.stat().st_size}}
     for want in ("spam.jsonl", "routing.jsonl"):
         data = read_jsonl(dest / want)
         if not data or not {"id", "text", "label"} <= set(data[0]):
             raise RuntimeError(f"{want} is empty or missing id/text/label")
         rows[want] = data
-        print(f"{want}: {len(data)} items", flush=True)
-    return rows["spam.jsonl"], rows["routing.jsonl"]
+        labels = {}
+        for row in data:
+            labels[str(row["label"])] = labels.get(str(row["label"]), 0) + 1
+        meta[want] = {
+            "sha256": sha256_file(dest / want),
+            "n_items": len(data),
+            "label_counts": dict(sorted(labels.items())),
+        }
+        print(f"{want}: {len(data)} items sha256 {meta[want]['sha256'][:12]}", flush=True)
+    return rows["spam.jsonl"], rows["routing.jsonl"], meta
 
 
-def server_command(binary, model_path, alias, flash):
+def server_command(binary, model_path, alias, flash, n_slots):
     threads = str(min(8, os.cpu_count() or 2))
     return [
         str(binary),
@@ -551,8 +549,8 @@ def server_command(binary, model_path, alias, flash):
         "--host", HOST,
         "--port", str(PORT),
         "-ngl", "all",
-        "-np", str(N_PARALLEL_SLOTS),
-        "-c", str(CTX_SIZE),
+        "-np", str(n_slots),
+        "-c", str(CTX_PER_SLOT * n_slots),
         "-t", threads,
         "-tb", threads,
         "--fit", "off",
@@ -584,11 +582,11 @@ def stop_server(proc):
         proc.wait(timeout=10)
 
 
-def log_text(path: Path):
+def log_text(path: Path, tail=12000):
     if not path.exists():
         return ""
     data = path.read_text(encoding="utf-8", errors="replace")
-    return data[-12000:]
+    return data if tail is None else data[-tail:]
 
 
 def wait_until_loaded(proc, log_path, timeout=180):
@@ -612,14 +610,40 @@ def wait_until_loaded(proc, log_path, timeout=180):
     raise RuntimeError("llama-server did not become ready\n" + log_text(log_path)[-2500:])
 
 
-def start_server(binary, env, model_path, alias):
+OFFLOAD_RE = re.compile(r"offloaded\s+(\d+)\s*/\s*(\d+)\s+layers\s+to\s+GPU", re.IGNORECASE)
+
+
+def check_full_offload(log_path, timeout=10):
+    """Return (offloaded, total) from the llama-server log. Raises unless every layer is on the GPU."""
+    deadline = time.time() + timeout
+    match = None
+    while time.time() < deadline:
+        matches = OFFLOAD_RE.findall(log_text(log_path, tail=None))
+        if matches:
+            match = matches[-1]
+            break
+        time.sleep(0.5)
+    if not match:
+        raise RuntimeError(
+            "llama-server log has no 'offloaded N/N layers to GPU' line, so full GPU offload "
+            "cannot be verified. Aborting.\n" + log_text(log_path)[-2500:]
+        )
+    offloaded, total = int(match[0]), int(match[1])
+    if offloaded != total or total == 0:
+        raise RuntimeError(
+            f"only {offloaded}/{total} layers are on the GPU; this benchmark requires full offload. Aborting."
+        )
+    return offloaded, total
+
+
+def start_server(binary, env, model_path, alias, n_slots):
     paths = workspace()
     log_path = paths["log"]
     last_error = None
     for flash in ("on", "off"):
         if log_path.exists():
             log_path.unlink()
-        cmd = server_command(binary, model_path, alias, flash)
+        cmd = server_command(binary, model_path, alias, flash, n_slots)
         print("starting server:", " ".join(cmd), flush=True)
         log_handle = open(log_path, "w", encoding="utf-8")
         launcher = ["stdbuf", "-oL", "-eL"] if shutil.which("stdbuf") else []
@@ -632,34 +656,51 @@ def start_server(binary, env, model_path, alias):
             start_new_session=True,
         )
         try:
-            text = wait_until_loaded(proc, log_path)
-        except Exception as exc:
+            wait_until_loaded(proc, log_path)
+        except Exception as exc:  # noqa: BLE001 — retry once with flash attention off
             last_error = exc
             stop_server(proc)
             log_handle.close()
             print(f"start with -fa {flash} failed: {exc}", flush=True)
             continue
-        mem_after = gpu_mem_mib()
-        delta = mem_after - mem_before
-        offload = re.search(r"offloaded\s+(\d+)\s*/\s*(\d+)\s+layers to GPU", text)
-        print(f"server ready (-fa {flash}), GPU memory +{delta} MiB", flush=True)
-        if offload:
-            print(f"offloaded {offload.group(1)}/{offload.group(2)} layers to GPU", flush=True)
-        if delta < MIN_GPU_MIB and not (offload and int(offload.group(1)) > 0):
+        try:
+            offloaded, total = check_full_offload(log_path)
+        except Exception:
             stop_server(proc)
             log_handle.close()
-            last_error = RuntimeError(
-                f"GPU memory rose only {delta} MiB; the model is not fully on the GPU.\n" + text[-1500:]
-            )
-            continue
+            raise
+        mem_after = gpu_mem_mib()
+        print(
+            f"server ready (-fa {flash}, -np {n_slots}), offloaded {offloaded}/{total} layers, "
+            f"GPU memory used {mem_after} MiB (+{mem_after - mem_before} MiB)",
+            flush=True,
+        )
         return {
             "proc": proc,
             "log": log_handle,
             "cmd": cmd,
-            "gpu_mem_delta_mib": delta,
-            "flash": flash,
+            "flash_attn": flash,
+            "n_slots": n_slots,
+            "ctx_size_total": CTX_PER_SLOT * n_slots,
+            "offloaded_layers": offloaded,
+            "total_layers": total,
+            "gpu_mem_before_mib": mem_before,
+            "gpu_mem_used_after_load_mib": mem_after,
+            "gpu_mem_delta_mib": mem_after - mem_before,
         }
     raise RuntimeError(f"could not start llama-server for {model_path}") from last_error
+
+
+def close_server(server):
+    if not server:
+        return
+    stop_server(server["proc"])
+    if server.get("log"):
+        server["log"].close()
+
+
+def server_record(server):
+    return {key: value for key, value in server.items() if key not in ("proc", "log")}
 
 
 def base_url():
@@ -677,46 +718,158 @@ def http_session():
     return session
 
 
+class HttpError(RuntimeError):
+    """Transport failure or non-2xx status."""
+
+
+class MalformedResponse(ValueError):
+    """2xx response whose body does not have the expected structure."""
+
+
 def post_json(url, body):
+    """Returns (payload, elapsed_ms). A 2xx body that is not JSON comes back as
+    payload None so the parser counts it as malformed, not as an HTTP error."""
     started = time.perf_counter()
     try:
         response = http_session().post(url, json=body, timeout=(10, 60))
     except requests.RequestException as exc:
-        raise RuntimeError(str(exc)) from exc
+        raise HttpError(str(exc)) from exc
     elapsed = (time.perf_counter() - started) * 1000
+    if not response.ok:
+        raise HttpError(f"HTTP {response.status_code}: {response.text[:400]}")
     try:
         payload = response.json()
     except ValueError:
-        payload = {"text": response.text[:500]}
-    if not response.ok:
-        raise RuntimeError(f"HTTP {response.status_code}: {str(payload)[:400]}")
+        payload = None
     return payload, elapsed
 
 
-def parse_d1(payload, task, name="answer"):
+def usage_info(payload):
+    """Prompt tokens and llama-server timings, when the response carries them."""
+    usage = payload.get("usage") or {}
+    timings = payload.get("timings") if isinstance(payload.get("timings"), dict) else {}
+    prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+    if prompt_tokens is None:
+        prompt_tokens = timings.get("prompt_n")
+    info = {"prompt_tokens": prompt_tokens}
+    for key in ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms"):
+        if timings.get(key) is not None:
+            info[key] = timings[key]
+    return info
+
+
+def d1_answers(payload):
+    if not isinstance(payload, dict):
+        raise MalformedResponse("response is not a JSON object")
     answers = payload.get("answers", payload.get("results", payload))
-    if not isinstance(answers, dict) or name not in answers:
-        return None
+    if not isinstance(answers, dict):
+        raise MalformedResponse("answers is not an object")
+    return answers
+
+
+def parse_d1(payload, task, name="answer"):
+    """Returns (pred or None, info). Raises MalformedResponse on a bad structure."""
+    answers = d1_answers(payload)
+    if name not in answers or not isinstance(answers[name], dict):
+        raise MalformedResponse(f"missing answer {name!r}")
     answer = answers[name]
+    info = usage_info(payload)
     if task.kind == "noul":
-        if "noul" not in answer:
-            return None
-        p_yes = float(answer["noul"])
+        try:
+            p_yes = float(answer["noul"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MalformedResponse("noul missing or not a number") from exc
+        if not (math.isfinite(p_yes) and 0 <= p_yes <= 1):
+            raise MalformedResponse(f"noul outside [0, 1]: {p_yes}")
         values = {"0": 1 - p_yes, "1": p_yes}
-        return max(values, key=values.get)
+        return max(values, key=values.get), info
     probabilities = answer.get("probabilities") or {}
     if probabilities:
-        return max(probabilities, key=lambda key: float(probabilities[key]))
-    return answer.get("choice")
+        try:
+            pred = max(probabilities, key=lambda key: float(probabilities[key]))
+        except (TypeError, ValueError) as exc:
+            raise MalformedResponse("non-numeric probabilities") from exc
+    else:
+        pred = answer.get("choice")
+    return (pred if pred in task.options else None), info
+
+
+def normalize_text_answer(content, task, truncated=False):
+    """Narrow normalization of a chat answer. Accepts the bare token with optional
+    surrounding whitespace, one trailing ')', '.' or ':', and optionally the option's
+    own label after it ('A', 'A.', 'A)', 'A: ACCOUNT', 'A) ACCOUNT.', 'Yes.').
+    The label must belong to the same option; when the reply was cut off by
+    max_tokens it may be a prefix of that label ('A) ACC'). Anything else is None.
+    """
+    mapping = {token.lower(): label for token, label in task.tokens.items()}
+    text = (content or "").strip()
+    match = re.fullmatch(r"([A-Za-z0-9]+)\s*[\).:]?(?:\s+([A-Za-z_]+)\s*\.?)?", text)
+    if not match:
+        return None
+    token = match.group(1).lower()
+    if token not in mapping:
+        return None
+    word = match.group(2)
+    if word is None:
+        return mapping[token]
+    if task.kind == "noul":
+        expected = token  # options read "yes) yes" / "no) no"
+    elif task.kind == "choice":
+        expected = mapping[token]
+    else:
+        return None
+    word = word.lower()
+    expected = expected.lower()
+    if word == expected or (truncated and len(word) >= 1 and expected.startswith(word)):
+        return mapping[token]
+    return None
 
 
 def parse_qwen(payload, task):
+    """Returns (pred or None, info). Primary prediction is the CPU harness rule
+    (harness/models.py parse_chat): sum first-token top_logprobs mass per valid
+    answer token (token stripped and lowercased) and take the argmax. If the server
+    returned no logprobs it falls back to the normalized text parse."""
+    if not isinstance(payload, dict):
+        raise MalformedResponse("response is not a JSON object")
     try:
-        content = payload["choices"][0].get("message", {}).get("content") or ""
-    except (KeyError, IndexError, TypeError):
-        return None
+        choice = payload["choices"][0]
+        message = choice.get("message") or {}
+    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        raise MalformedResponse("no choices[0].message") from exc
+    content = message.get("content") or ""
+    if not isinstance(content, str):
+        raise MalformedResponse("content is not a string")
     mapping = {token.lower(): label for token, label in task.tokens.items()}
-    return mapping.get(content.strip().lower())
+    truncated = choice.get("finish_reason") == "length"
+    pred_text_strict = mapping.get(content.strip().lower())
+    pred_text = normalize_text_answer(content, task, truncated)
+    entries = ((choice.get("logprobs") or {}).get("content") or [])
+    tops = entries[0].get("top_logprobs") if entries and isinstance(entries[0], dict) else None
+    pred_logprob = None
+    if tops:
+        masses = dict.fromkeys(task.options, 0.0)
+        try:
+            for item in tops:
+                token = str(item["token"]).strip().lower()
+                if token in mapping:
+                    masses[mapping[token]] += math.exp(float(item["logprob"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MalformedResponse("bad top_logprobs entry") from exc
+        if sum(masses.values()) > 0:
+            pred_logprob = max(masses, key=masses.get)
+    info = usage_info(payload)
+    info.update(
+        {
+            "content": content[:40],
+            "has_logprobs": bool(tops),
+            "pred_logprob": pred_logprob,
+            "pred_text": pred_text,
+            "pred_text_strict": pred_text_strict,
+        }
+    )
+    pred = pred_logprob if tops else pred_text
+    return pred, info
 
 
 def expected_label(task, label):
@@ -730,11 +883,14 @@ def d1_body(task, text):
 
 
 def qwen_body(task, text, model_id):
+    # Identical to harness/models.py HTTPClient.body for local chat endpoints.
     return {
         "model": model_id,
         "messages": task.messages(text),
         "temperature": 0,
-        "max_tokens": 4,
+        "max_tokens": QWEN_MAX_TOKENS,
+        "logprobs": True,
+        "top_logprobs": QWEN_TOP_LOGPROBS,
     }
 
 
@@ -742,7 +898,7 @@ def resolve_qwen_model_id():
     try:
         payload = requests.get(base_url() + "/v1/models", timeout=10).json()
         ids = [row.get("id") for row in payload.get("data", []) if row.get("id")]
-    except (requests.RequestException, ValueError):
+    except (requests.RequestException, ValueError, AttributeError):
         return QWEN_MODEL_ID
     if QWEN_MODEL_ID in ids or not ids:
         return QWEN_MODEL_ID
@@ -750,197 +906,285 @@ def resolve_qwen_model_id():
     return ids[0]
 
 
-def warmup(url, body):
-    last = None
-    for _ in range(3):
+def run_jobs(url, bodies, parallel, handle):
+    """Send bodies with at most `parallel` in flight. handle(index, payload, elapsed)
+    or handle(index, exc, None) runs per request, inside the worker. Returns the real
+    elapsed wall-clock seconds for the whole batch (time.perf_counter around it)."""
+    counter = {"done": 0}
+    lock = threading.Lock()
+
+    def one(indexed):
+        index, body = indexed
         try:
             payload, elapsed = post_json(url, body)
-            print(f"warmup {elapsed:.1f} ms", flush=True)
-            return payload, elapsed
-        except RuntimeError as exc:
-            last = exc
-            time.sleep(1)
-    raise RuntimeError(f"warmup failed: {last}")
+        except Exception as exc:  # noqa: BLE001 — one bad request should not kill the pool
+            handle(index, exc, None)
+        else:
+            handle(index, payload, elapsed)
+        with lock:
+            counter["done"] += 1
+            done = counter["done"]
+        if done % 50 == 0:
+            print(f"  {done}/{len(bodies)}", flush=True)
+
+    started = time.perf_counter()
+    if parallel == 1:
+        for indexed in enumerate(bodies):
+            one(indexed)
+    else:
+        with ThreadPoolExecutor(max_workers=parallel) as pool:
+            list(pool.map(one, enumerate(bodies)))
+    return time.perf_counter() - started
 
 
-def summarize_latencies(latencies, errors, n_parsed, n_correct, wall_s, extra):
-    n_ok = len(latencies)
-    n = n_ok + errors
-    mean = sum(latencies) / n_ok if n_ok else None
+def evaluate(url, bodies, labels, parallel, parse):
+    """Runs a batch and classifies every request as http_error, malformed,
+    unparsed (well-formed but no valid answer) or parsed. Parsing happens inside
+    the try, so any parser failure counts as malformed."""
+    records = [None] * len(bodies)
+
+    def handle(index, payload, elapsed):
+        if elapsed is None:
+            records[index] = {"status": "http_error", "error": str(payload)[:300]}
+            return
+        record = {"latency_ms": elapsed, "label": labels[index]}
+        try:
+            pred, info = parse(payload)
+        except Exception as exc:  # noqa: BLE001
+            record.update(status="malformed", error=f"{type(exc).__name__}: {exc}"[:300])
+        else:
+            record.update(info)
+            record["pred"] = pred
+            record["status"] = "parsed" if pred is not None else "unparsed"
+        records[index] = record
+
+    wall = run_jobs(url, bodies, parallel, handle)
+    return records, wall
+
+
+def mean_of(records, key):
+    values = [r[key] for r in records if isinstance(r.get(key), (int, float))]
+    return (sum(values) / len(values)) if values else None
+
+
+def summarize(records, wall_s, k=1, extra=None):
+    n = len(records)
+    ok = [r for r in records if r["status"] != "http_error"]
+    latencies = [r["latency_ms"] for r in ok]
+    count = {s: sum(1 for r in records if r["status"] == s) for s in ("http_error", "malformed", "unparsed", "parsed")}
+    labelled = [r for r in records if r["status"] == "parsed" and r.get("label") is not None]
+    correct = sum(1 for r in labelled if r["pred"] == r["label"])
     row = {
         "n": n,
-        "n_ok": n_ok,
-        "n_error": errors,
-        "n_parsed": n_parsed,
-        "n_correct": n_correct,
-        "accuracy": (n_correct / n_parsed) if n_parsed else None,
+        "n_http_ok": len(ok),
+        "n_http_errors": count["http_error"],
+        "n_malformed": count["malformed"],
+        "n_unparsed": count["unparsed"],
+        "n_parsed": count["parsed"],
+        "n_correct": correct,
+        "accuracy_on_parsed": (correct / count["parsed"]) if count["parsed"] else None,
+        "end_to_end_accuracy": (correct / n) if n else None,
+        "parse_rate": (count["parsed"] / n) if n else None,
+        "error_rate": (count["http_error"] / n) if n else None,
+        "malformed_rate": (count["malformed"] / n) if n else None,
         "latency_p50_ms": percentile(latencies, 50),
         "latency_p95_ms": percentile(latencies, 95),
         "latency_min_ms": min(latencies) if latencies else None,
         "latency_max_ms": max(latencies) if latencies else None,
-        "latency_mean_ms": mean,
-        "throughput_decisions_per_s": (n_ok / wall_s) if wall_s > 0 else None,
+        "latency_mean_ms": (sum(latencies) / len(latencies)) if latencies else None,
         "wall_s": wall_s,
+        "k": k,
+        "throughput_requests_per_s": (len(ok) / wall_s) if wall_s > 0 else None,
+        "throughput_decisions_per_s": (len(ok) * k / wall_s) if wall_s > 0 else None,
+        "mean_prompt_tokens": mean_of(ok, "prompt_tokens"),
+        "mean_prompt_ms": mean_of(ok, "prompt_ms"),
+        "mean_predicted_n": mean_of(ok, "predicted_n"),
+        "mean_predicted_ms": mean_of(ok, "predicted_ms"),
     }
-    row.update(extra)
-    if n_ok == 0 or (errors > n_ok and errors > 10):
-        raise RuntimeError(f"too many failed requests: {row}")
+    if any("pred_text" in r for r in ok):
+        text_parsed = [r for r in ok if r.get("pred_text") is not None]
+        strict = [r for r in ok if r.get("pred_text_strict") is not None]
+        both = [r for r in ok if r.get("pred_text") is not None and r.get("pred_logprob") is not None]
+        row.update(
+            {
+                "qwen_n_with_logprobs": sum(1 for r in ok if r.get("has_logprobs")),
+                "qwen_text_parse_rate_strict": (len(strict) / n) if n else None,
+                "qwen_text_parse_rate_normalized": (len(text_parsed) / n) if n else None,
+                "qwen_text_end_to_end_accuracy": (
+                    sum(1 for r in text_parsed if r["pred_text"] == r.get("label")) / n
+                ) if n else None,
+                "qwen_text_logprob_agreement": (
+                    sum(1 for r in both if r["pred_text"] == r["pred_logprob"]) / len(both)
+                ) if both else None,
+            }
+        )
+    row.update(extra or {})
+    errors = [r["error"] for r in records if r.get("error")]
+    if errors:
+        row["error_examples"] = errors[:3]
+        print(f"  http_errors {count['http_error']} malformed {count['malformed']} e.g. {errors[0]}", flush=True)
+    if not ok:
+        raise RuntimeError(f"every request failed: {row}")
     return row
 
 
-def run_parallel(url, jobs, parallel, parse):
-    """jobs are (body, label). Latency is the HTTP time once a worker sends.
-    Throughput uses wall clock with at most `parallel` requests in flight.
-    """
-    state = {"latencies": [], "errors": 0, "samples": [], "parsed": 0, "correct": 0, "done": 0}
-    lock = threading.Lock()
-
-    def one(job):
-        body, label = job
-        try:
-            payload, elapsed = post_json(url, body)
-        except Exception as exc:  # noqa: BLE001 — one bad response should not kill the pool
-            with lock:
-                state["errors"] += 1
-                state["done"] += 1
-                if len(state["samples"]) < 5:
-                    state["samples"].append(str(exc)[:300])
-                done = state["done"]
-            if done % 50 == 0:
-                print(f"  {done}/{len(jobs)}", flush=True)
-            return
-        pred = parse(payload)
-        with lock:
-            state["latencies"].append(elapsed)
-            if pred is not None:
-                state["parsed"] += 1
-                if label is not None and pred == label:
-                    state["correct"] += 1
-            state["done"] += 1
-            done = state["done"]
-        if done % 50 == 0:
-            print(f"  {done}/{len(jobs)}", flush=True)
-
-    started = time.perf_counter()
-    if parallel == 1:
-        for job in jobs:
-            one(job)
-    else:
-        with ThreadPoolExecutor(max_workers=parallel) as pool:
-            list(pool.map(one, jobs))
-    wall = time.perf_counter() - started
-    if state["samples"]:
-        print(f"  errors {state['errors']} e.g. {state['samples'][0]}", flush=True)
-    return state["latencies"], state["errors"], state["parsed"], state["correct"], wall
-
-
-def bench_task(kind, task, items, parallel, model_id=None):
+def task_batch(kind, task, items, model_id=None):
+    labels = [expected_label(task, row["label"]) for row in items]
     if kind == "d1":
         url = base_url() + "/v1/systemone"
-        jobs = [(d1_body(task, row["text"]), expected_label(task, row["label"])) for row in items]
+        bodies = [d1_body(task, row["text"]) for row in items]
 
         def parse(payload):
             return parse_d1(payload, task)
     else:
         url = base_url() + "/v1/chat/completions"
-        jobs = [
-            (qwen_body(task, row["text"], model_id), expected_label(task, row["label"])) for row in items
-        ]
+        bodies = [qwen_body(task, row["text"], model_id) for row in items]
 
         def parse(payload):
             return parse_qwen(payload, task)
-    print(f"{kind} {task.name} parallel={parallel} n={len(jobs)}", flush=True)
-    latencies, errors, n_parsed, n_correct, wall = run_parallel(url, jobs, parallel, parse)
-    return summarize_latencies(
-        latencies, errors, n_parsed, n_correct, wall,
-        {"model": "d1-3B" if kind == "d1" else "qwen2.5-3b-instruct", "task": task.name, "parallel": parallel},
+    return url, bodies, labels, parse
+
+
+def warmup(kind, items, parallel, model_id=None):
+    """WARMUP_REQUESTS unmeasured requests at the run's concurrency."""
+    task = TASKS["spam"]
+    rows = (items * WARMUP_REQUESTS)[:WARMUP_REQUESTS]
+    url, bodies, labels, parse = task_batch(kind, task, rows, model_id)
+    records, wall = evaluate(url, bodies, labels, parallel, parse)
+    ok = sum(1 for r in records if r["status"] != "http_error")
+    print(f"warmup {ok}/{len(records)} ok in {wall:.2f}s", flush=True)
+    if ok == 0:
+        raise RuntimeError(f"warmup failed: {records[0].get('error')}")
+
+
+def bench_task(kind, task, items, parallel, rep, model_id=None):
+    url, bodies, labels, parse = task_batch(kind, task, items, model_id)
+    print(f"rep {rep} {kind} {task.name} concurrency={parallel} n={len(bodies)}", flush=True)
+    records, wall = evaluate(url, bodies, labels, parallel, parse)
+    row = summarize(
+        records, wall,
+        extra={"model": KIND_TO_MODEL[kind], "task": task.name, "parallel": parallel, "rep": rep},
     )
+    return row, [r.get("latency_ms") for r in records if r["status"] != "http_error"]
 
 
-def multiq_jobs(items):
-    rng = random.Random(42)
-    jobs = []
-    for item in items:
-        ks = [1, 2, 3, 5]
-        rng.shuffle(ks)
-        for k in ks:
-            questions = dict(list(QUESTIONS.items())[:k])
-            body = {"state": item["text"], "questions": questions}
-            jobs.append((body, k, list(questions)))
-    return jobs
+def multiq_items(routing, n):
+    return random.Random(SEED).sample(routing, min(n, len(routing)))
+
+
+def multiq_k_order():
+    ks = list(MULTIQ_KS)
+    random.Random(SEED).shuffle(ks)
+    return ks
 
 
 def run_multiq(items):
+    """d1 only, concurrency 1. Each k is one batch over the same items, timed with
+    time.perf_counter around the whole batch, so wall_s is real elapsed time."""
     url = base_url() + "/v1/systemone"
-    jobs = multiq_jobs(items)
-    by_k = {k: [] for k in (1, 2, 3, 5)}
-    errors = {k: 0 for k in (1, 2, 3, 5)}
-    print(f"d1 multiq sequential n_items={len(items)} requests={len(jobs)}", flush=True)
-    for index, (body, k, names) in enumerate(jobs, start=1):
-        try:
-            payload, elapsed = post_json(url, body)
-        except Exception as exc:  # noqa: BLE001
-            errors[k] += 1
-            if errors[k] == 1:
-                print(f"  multiq k={k} error {exc}", flush=True)
-            continue
-        answers = payload.get("answers", payload.get("results", payload))
-        if not isinstance(answers, dict) or not set(names).issubset(answers):
-            errors[k] += 1
-            continue
-        by_k[k].append(elapsed)
-        if index % 40 == 0:
-            print(f"  multiq {index}/{len(jobs)}", flush=True)
+    team = TASKS["routing"]
     rows = []
-    for k in (1, 2, 3, 5):
-        latencies = by_k[k]
-        wall = sum(latencies) / 1000 if latencies else 0
-        rows.append({
-            "model": "d1-3B",
-            "task": "routing-multiq",
-            "k": k,
-            "parallel": 1,
-            "n": len(latencies) + errors[k],
-            "n_ok": len(latencies),
-            "n_error": errors[k],
-            "latency_p50_ms": percentile(latencies, 50),
-            "latency_p95_ms": percentile(latencies, 95),
-            "latency_mean_ms": (sum(latencies) / len(latencies)) if latencies else None,
-            "throughput_decisions_per_s": (len(latencies) / wall) if wall else None,
-            "wall_s": wall,
-        })
-    if sum(row["n_ok"] for row in rows) == 0:
-        raise RuntimeError("multiq produced no successful responses")
-    return rows
+    for k in multiq_k_order():
+        names = list(QUESTIONS)[:k]
+        questions = {name: QUESTIONS[name] for name in names}
+        bodies = [{"state": item["text"], "questions": questions} for item in items]
+        labels = [expected_label(team, item["label"]) for item in items]
+
+        def parse(payload, names=names):
+            answers = d1_answers(payload)
+            missing = [name for name in names if name not in answers]
+            if missing:
+                raise MalformedResponse(f"missing answers {missing}")
+            return parse_d1(payload, team, "team")
+
+        print(f"d1 multiq k={k} n={len(bodies)}", flush=True)
+        records, wall = evaluate(url, bodies, labels, 1, parse)
+        row = summarize(records, wall, k=k, extra={"model": "d1-3B", "task": "routing-multiq", "parallel": 1})
+        row["team_accuracy_note"] = "accuracy fields score the 'team' (routing) answer only"
+        rows.append(row)
+    return sorted(rows, key=lambda row: row["k"])
+
+
+def pool_rows(rows, latencies):
+    """Pooled stats per (model, task, concurrency) across repetitions. Latency
+    percentiles pool every request; throughput is total successes / total wall.
+    Accuracy is taken from rep 1 (the full item set) because rep 2 re-scores a subset."""
+    pooled = []
+    keys = []
+    for row in rows:
+        key = (row["model"], row["task"], row["parallel"])
+        if key not in keys:
+            keys.append(key)
+    for key in keys:
+        group = [row for row in rows if (row["model"], row["task"], row["parallel"]) == key]
+        lat = [value for row in group for value in latencies[(row["rep"],) + key]]
+        wall = sum(row["wall_s"] for row in group)
+        ok = sum(row["n_http_ok"] for row in group)
+        first = next((row for row in group if row["rep"] == 1), group[0])
+        pooled.append(
+            {
+                "model": key[0],
+                "task": key[1],
+                "parallel": key[2],
+                "reps": [row["rep"] for row in group],
+                "n": sum(row["n"] for row in group),
+                "n_http_ok": ok,
+                "n_http_errors": sum(row["n_http_errors"] for row in group),
+                "n_malformed": sum(row["n_malformed"] for row in group),
+                "error_rate": sum(row["n_http_errors"] for row in group) / max(1, sum(row["n"] for row in group)),
+                "latency_p50_ms": percentile(lat, 50),
+                "latency_p95_ms": percentile(lat, 95),
+                "latency_mean_ms": (sum(lat) / len(lat)) if lat else None,
+                "wall_s": wall,
+                "throughput_requests_per_s": (ok / wall) if wall > 0 else None,
+                "throughput_decisions_per_s": (ok / wall) if wall > 0 else None,
+                "accuracy_source": f"rep {first['rep']}",
+                "end_to_end_accuracy": first["end_to_end_accuracy"],
+                "accuracy_on_parsed": first["accuracy_on_parsed"],
+                "parse_rate": first["parse_rate"],
+                "mean_prompt_tokens": first["mean_prompt_tokens"],
+            }
+        )
+    return pooled
 
 
 def fmt_ms(value):
-    return "  n/a" if value is None else f"{value:7.1f}"
+    return "    n/a" if value is None else f"{value:7.1f}"
 
 
 def fmt_rate(value):
-    return "  n/a" if value is None else f"{value:7.2f}"
+    return "    n/a" if value is None else f"{value:7.2f}"
 
 
-def print_summary(rows, multiq_rows):
-    header = f"{'model':<22} {'task':<16} {'par':>3} {'n':>5} {'p50 ms':>8} {'p95 ms':>8} {'dec/s':>8} {'acc':>6}"
+def fmt_frac(value):
+    return "   n/a" if value is None else f"{value:6.3f}"
+
+
+def print_summary(rows, pooled, multiq_rows):
+    header = (
+        f"{'model':<20} {'task':<8} {'rep':>4} {'conc':>4} {'n':>4} {'p50 ms':>7} {'p95 ms':>7} "
+        f"{'req/s':>7} {'acc_e2e':>7} {'acc_prs':>7} {'parse':>6} {'err':>6} {'ptok':>6}"
+    )
     print("\n" + header, flush=True)
     print("-" * len(header), flush=True)
-    for row in rows:
-        acc = row.get("accuracy")
-        acc_s = "  n/a" if acc is None else f"{acc:6.3f}"
+    for row in rows + pooled:
+        rep = "pool" if "reps" in row else str(row["rep"])
+        ptok = row.get("mean_prompt_tokens")
         print(
-            f"{row['model']:<22} {row['task']:<16} {row['parallel']:>3} {row['n']:>5} "
+            f"{row['model']:<20} {row['task']:<8} {rep:>4} {row['parallel']:>4} {row['n']:>4} "
             f"{fmt_ms(row['latency_p50_ms'])} {fmt_ms(row['latency_p95_ms'])} "
-            f"{fmt_rate(row['throughput_decisions_per_s'])} {acc_s}",
+            f"{fmt_rate(row['throughput_requests_per_s'])} {fmt_frac(row.get('end_to_end_accuracy')):>7} "
+            f"{fmt_frac(row.get('accuracy_on_parsed')):>7} {fmt_frac(row.get('parse_rate'))} "
+            f"{fmt_frac(row.get('error_rate'))} {'   n/a' if ptok is None else f'{ptok:6.0f}'}",
             flush=True,
         )
-    print("\nmultiq (d1, sequential, latency vs questions per request)", flush=True)
-    print(f"{'k':>3} {'n':>5} {'p50 ms':>8} {'p95 ms':>8} {'mean ms':>8} {'dec/s':>8}", flush=True)
+    print("\nmultiq (d1, concurrency 1, -np 1, rep 1)", flush=True)
+    print(f"{'k':>3} {'n':>4} {'p50 ms':>7} {'p95 ms':>7} {'mean ms':>7} {'req/s':>7} {'dec/s':>7} {'team acc':>8}", flush=True)
     for row in multiq_rows:
         print(
-            f"{row['k']:>3} {row['n']:>5} {fmt_ms(row['latency_p50_ms'])} {fmt_ms(row['latency_p95_ms'])} "
-            f"{fmt_ms(row['latency_mean_ms'])} {fmt_rate(row['throughput_decisions_per_s'])}",
+            f"{row['k']:>3} {row['n']:>4} {fmt_ms(row['latency_p50_ms'])} {fmt_ms(row['latency_p95_ms'])} "
+            f"{fmt_ms(row['latency_mean_ms'])} {fmt_rate(row['throughput_requests_per_s'])} "
+            f"{fmt_rate(row['throughput_decisions_per_s'])} {fmt_frac(row['end_to_end_accuracy']):>8}",
             flush=True,
         )
 
@@ -948,144 +1192,214 @@ def print_summary(rows, multiq_rows):
 def round_row(row):
     out = {}
     for key, value in row.items():
-        if isinstance(value, float):
-            out[key] = round(value, 3)
-        else:
-            out[key] = value
+        out[key] = round(value, 4) if isinstance(value, float) else value
     return out
 
 
 def download_models():
     models = workspace()["models"]
-    specs = (
-        ("d1-3B", D1_NAME, D1_URL),
-        ("qwen2.5-3b-instruct", QWEN_NAME, QWEN_URL),
-    )
     paths = {}
-    for key, name, url in specs:
-        dest = models / name
-        download(url, dest, min_bytes=100_000_000)
+    for key, spec in MODELS.items():
+        dest = models / spec["file"]
+        download(spec["url"], dest, min_bytes=100_000_000)
+        if dest.stat().st_size != spec["bytes"]:
+            dest.unlink(missing_ok=True)
+            raise RuntimeError(f"{dest} is {dest.stat().st_size} bytes, expected {spec['bytes']}")
         with open(dest, "rb") as handle:
             magic = handle.read(4)
         if magic != b"GGUF":
             dest.unlink(missing_ok=True)
             raise RuntimeError(f"{dest} is not a GGUF file")
+        marker = dest.with_name(dest.name + ".sha256-verified")
+        stamp = f"{spec['sha256']} {dest.stat().st_size} {int(dest.stat().st_mtime)}"
+        if marker.exists() and marker.read_text().strip() == stamp:
+            print(f"{spec['file']} sha256 already verified", flush=True)
+        else:
+            print(f"hashing {spec['file']} ...", flush=True)
+            digest = sha256_file(dest)
+            if digest != spec["sha256"]:
+                dest.unlink(missing_ok=True)
+                raise RuntimeError(f"sha256 mismatch for {spec['file']}: got {digest}, expected {spec['sha256']}")
+            marker.write_text(stamp + "\n")
+            print(f"{spec['file']} sha256 OK {digest[:12]}", flush=True)
         paths[key] = dest
-        print(f"{name} {dest.stat().st_size} bytes", flush=True)
     return paths
+
+
+def run_model(binary, env, kind, model_path, items, rep, rows, latencies, servers, multiq_state, started):
+    """One model in one repetition: a -np 1 server for concurrency 1, then a
+    restarted -np 4 server for concurrency 4."""
+    model = KIND_TO_MODEL[kind]
+    for parallel in CONCURRENCIES:
+        server = start_server(binary, env, model_path, MODELS[model]["alias"], parallel)
+        try:
+            model_id = resolve_qwen_model_id() if kind == "qwen" else None
+            warmup(kind, items["spam"], parallel, model_id)
+            for task_name in ("spam", "routing"):
+                row, lat = bench_task(kind, TASKS[task_name], items[task_name], parallel, rep, model_id)
+                rows.append(row)
+                latencies[(rep, model, task_name, parallel)] = lat
+            if kind == "d1" and rep == 1 and parallel == 1:
+                elapsed = time.perf_counter() - started
+                if elapsed > MULTIQ_CUTOFF_S:
+                    n_multi = MULTIQ_SHORT
+                    reason = (
+                        f"{n_multi} routing items (seeded sample, seed {SEED}) because {elapsed / 60:.1f} min "
+                        f"had elapsed (cutoff {MULTIQ_CUTOFF_S // 60} min)."
+                    )
+                else:
+                    n_multi = MULTIQ_FULL
+                    reason = f"{n_multi} routing items, seeded random sample (random.Random({SEED}).sample)."
+                print("multiq:", reason, flush=True)
+                sample = multiq_items(items["routing_all"], n_multi)
+                multiq_state.update(
+                    n_items=len(sample), reason=reason, item_ids=[item["id"] for item in sample],
+                    rows=run_multiq(sample),
+                )
+            record = server_record(server)
+            record["gpu_mem_used_after_runs_mib"] = gpu_mem_mib()
+            record.update(model=model, rep=rep)
+            servers.append(record)
+        finally:
+            close_server(server)
 
 
 def main():
     started = time.perf_counter()
     cuda, gpu = gpu_query()
-    wheel = install_python_wheel(cuda)
     binary, env = ensure_llama_server(cuda)
     version = subprocess.run([str(binary), "--version"], capture_output=True, text=True, env=env)
     version_text = ((version.stdout or "") + (version.stderr or "")).strip().splitlines()
     print(version_text[0] if version_text else "llama-server", flush=True)
     models = download_models()
-    spam, routing = extract_eval_zip(locate_zip(), workspace()["root"])
-    sets = {"spam": spam, "routing": routing}
-    rows = []
-    server = None
-    multiq_meta = {}
-    try:
-        for kind, model_key, alias, filename in (
-            ("d1", "d1-3B", "d1-3B", D1_NAME),
-            ("qwen", "qwen2.5-3b-instruct", QWEN_MODEL_ID, QWEN_NAME),
-        ):
-            stop_server(server["proc"] if server else None)
-            if server and server.get("log"):
-                server["log"].close()
-            server = start_server(binary, env, models[model_key], alias)
-            model_id = None
-            if kind == "d1":
-                warm_body = d1_body(TASKS["spam"], spam[0]["text"])
-                warmup(base_url() + "/v1/systemone", warm_body)
-            else:
-                model_id = resolve_qwen_model_id()
-                warm_body = qwen_body(TASKS["spam"], spam[0]["text"], model_id)
-                warmup(base_url() + "/v1/chat/completions", warm_body)
-            for task_name in ("spam", "routing"):
-                for parallel in (1, 4):
-                    rows.append(bench_task(kind, TASKS[task_name], sets[task_name], parallel, model_id))
-            if kind == "d1":
-                elapsed = time.perf_counter() - started
-                if elapsed > MULTIQ_CUTOFF_S:
-                    n_multi = MULTIQ_SHORT
-                    reason = (
-                        f"Used {n_multi} routing items because {elapsed / 60:.1f} min had already elapsed "
-                        f"(cutoff {MULTIQ_CUTOFF_S // 60} min). Prefer 30 when the budget allows."
-                    )
-                else:
-                    n_multi = min(MULTIQ_FULL, len(routing))
-                    reason = f"Used the first {n_multi} routing items, k in {{1, 2, 3, 5}}."
-                print(reason, flush=True)
-                multiq_rows = run_multiq(routing[:n_multi])
-                multiq_meta = {"n_items": n_multi, "reason": reason, "rows": multiq_rows}
-    finally:
-        if server:
-            stop_server(server["proc"])
-            server["log"].close()
+    spam, routing, dataset_meta = extract_eval_zip(locate_zip(), workspace()["root"])
 
-    multiq_rows = multiq_meta.get("rows", [])
-    print_summary(rows, multiq_rows)
+    rep_plan = [
+        {"rep": 1, "order": ["d1", "qwen"], "items": {"spam": spam, "routing": routing}},
+    ]
+    rows, latencies, servers, multiq_state = [], {}, [], {}
+    # Rep 1: full sets, d1 first.
+    for kind in rep_plan[0]["order"]:
+        items = dict(rep_plan[0]["items"], routing_all=routing)
+        run_model(binary, env, kind, models[KIND_TO_MODEL[kind]], items, 1, rows, latencies, servers, multiq_state, started)
+
+    # Rep 2: reversed order on a seeded subset, sized to the remaining budget.
+    elapsed = time.perf_counter() - started
+    if elapsed > REP2_SKIP_AFTER_S:
+        rep2_note = f"rep 2 skipped: {elapsed / 60:.1f} min elapsed (limit {REP2_SKIP_AFTER_S // 60} min)."
+        n_rep2 = 0
+    else:
+        n_rep2 = REP2_ITEMS_SHORT if elapsed > REP2_SHRINK_AFTER_S else REP2_ITEMS
+        rep2_note = (
+            f"rep 2: Qwen then d1 on {n_rep2} items per task, random.Random({SEED + 2}).sample of each "
+            f"rep 1 set ({elapsed / 60:.1f} min elapsed before rep 2)."
+        )
+    print(rep2_note, flush=True)
+    if n_rep2:
+        rng = random.Random(SEED + 2)
+        subset = {
+            "spam": rng.sample(spam, min(n_rep2, len(spam))),
+            "routing": rng.sample(routing, min(n_rep2, len(routing))),
+        }
+        rep_plan.append({"rep": 2, "order": ["qwen", "d1"], "items": subset})
+        for kind in rep_plan[1]["order"]:
+            items = dict(subset, routing_all=routing)
+            run_model(binary, env, kind, models[KIND_TO_MODEL[kind]], items, 2, rows, latencies, servers, multiq_state, started)
+
+    pooled = pool_rows(rows, latencies)
+    multiq_rows = multiq_state.get("rows", [])
+    print_summary(rows, pooled, multiq_rows)
+
+    model_config = {}
+    for model, spec in MODELS.items():
+        mine = [s for s in servers if s["model"] == model]
+        model_config[model] = {
+            "repo": spec["repo"],
+            "revision": spec["revision"],
+            "url": spec["url"],
+            "file": spec["file"],
+            "sha256": spec["sha256"],
+            "sha256_verified": True,
+            "bytes": models[model].stat().st_size,
+            "endpoint": "/v1/systemone" if model == "d1-3B" else "/v1/chat/completions",
+            "flash_attn": sorted({s["flash_attn"] for s in mine}),
+            "layers_offloaded": sorted({f"{s['offloaded_layers']}/{s['total_layers']}" for s in mine}),
+            "gpu_mem_used_after_load_mib": {f"rep{s['rep']}-np{s['n_slots']}": s["gpu_mem_used_after_load_mib"] for s in mine},
+            "gpu_mem_delta_mib": {f"rep{s['rep']}-np{s['n_slots']}": s["gpu_mem_delta_mib"] for s in mine},
+            "gpu_mem_used_after_runs_mib": {f"rep{s['rep']}-np{s['n_slots']}": s["gpu_mem_used_after_runs_mib"] for s in mine},
+        }
     report = {
         "created_unix": time.time(),
         "elapsed_s": round(time.perf_counter() - started, 1),
         "gpu": gpu,
+        "scope": (
+            "End-to-end application performance as served by llama-server (HTTP latency, throughput, "
+            "accuracy). Not a measure of architecture efficiency: the two endpoints build different "
+            "prompts and do different server-side work; see mean_prompt_tokens and timings."
+        ),
         "llama_server": {
             "binary": str(binary),
             "version": version_text[:3],
-            "n_gpu_layers": "all",
-            "parallel_slots": N_PARALLEL_SLOTS,
-            "ctx_size_total": CTX_SIZE,
-            "ctx_per_slot_approx": CTX_SIZE // N_PARALLEL_SLOTS,
+            "n_gpu_layers": "all (full offload verified from the load log on every start)",
+            "ctx_per_slot": CTX_PER_SLOT,
+            "concurrency_to_slots": {str(c): c for c in CONCURRENCIES},
             "prompt_cache": False,
-            "flash_attn": server["flash"] if server else None,
-            "command": server["cmd"] if server else None,
+            "servers": servers,
         },
-        "llama_cpp_python": wheel,
-        "models": {
-            "d1-3B": {"url": D1_URL, "file": D1_NAME, "bytes": models["d1-3B"].stat().st_size},
-            "qwen2.5-3b-instruct": {
-                "url": QWEN_URL,
-                "file": QWEN_NAME,
-                "bytes": models["qwen2.5-3b-instruct"].stat().st_size,
-            },
-        },
+        "models": model_config,
+        "dataset": dataset_meta,
         "settings": {
-            "temperature": 0,
-            "max_tokens": 4,
-            "logprobs": False,
-            "warmup": "one request per model after load, not included in metrics",
+            "qwen_body": {
+                "temperature": 0,
+                "max_tokens": QWEN_MAX_TOKENS,
+                "logprobs": True,
+                "top_logprobs": QWEN_TOP_LOGPROBS,
+            },
+            "qwen_prediction": (
+                "harness/models.py rule: argmax of first-token top_logprobs mass over valid answer tokens; "
+                "normalized text parse used only when logprobs are absent, and reported separately"
+            ),
+            "constrained_decoding": "none (no grammar or logit_bias), to keep the CPU harness request unchanged",
+            "warmup": f"{WARMUP_REQUESTS} requests per server start at the run's concurrency, not measured",
+            "repetitions": [
+                {"rep": plan["rep"], "order": plan["order"], "n_items": {t: len(plan["items"][t]) for t in ("spam", "routing")}}
+                for plan in rep_plan
+            ],
+            "seed": SEED,
             "percentile": "nearest-rank",
-            "throughput": "HTTP successes / wall seconds at the stated concurrency",
+            "throughput": "successful HTTP requests / real elapsed wall-clock of the batch (time.perf_counter)",
+            "decisions_per_s": "throughput_requests_per_s * k (k = questions per request; 1 for spam/routing)",
+            "end_to_end_accuracy": "correct / all requests (http errors, malformed and unparsed count as wrong)",
+            "accuracy_on_parsed": "correct / parsed",
         },
         "notes": [
             "Prompts and question objects are copied from harness/tasks.py and harness/multiq.py.",
             "Routing criteria use SUBSCRIPTION, not NEWSLETTER.",
-            "d1 requests are {state, questions: {answer: task question}} to /v1/systemone.",
-            "Qwen requests are chat completions with the harness system and user messages.",
-            "Parallel 1 sends one request at a time. Parallel 4 keeps four requests in flight on a server started with -np 4.",
-            "The server stays loaded between parallel 1 and 4. Prompt cache and slot similarity are off.",
-            "-c 8192 with -np 4 gives about 2048 tokens per slot, which covers these short prompts.",
-            multiq_meta.get("reason", ""),
+            "Concurrency 1 runs on a server started with -np 1; concurrency 4 on a fresh server with -np 4.",
+            "The multi-question test uses a seeded random sample of routing items (the CPU harness uses the first 30).",
+            "multiq runs each k as its own timed batch (k order shuffled with the same seed).",
+            rep2_note,
+            multiq_state.get("reason", ""),
         ],
         "results": [round_row(row) for row in rows],
+        "pooled": [round_row(row) for row in pooled],
         "multiq": {
-            "n_items": multiq_meta.get("n_items"),
-            "reason": multiq_meta.get("reason"),
+            "n_items": multiq_state.get("n_items"),
+            "reason": multiq_state.get("reason"),
+            "item_ids": multiq_state.get("item_ids"),
             "questions": list(QUESTIONS),
-            "k": [1, 2, 3, 5],
-            "k_order": "shuffled per item with random.Random(42), matching harness/multiq.py",
+            "k_order": multiq_k_order(),
             "parallel": 1,
             "rows": [round_row(row) for row in multiq_rows],
         },
     }
     out = workspace()["results"]
-    out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"\nwrote {out}", flush=True)
+    full = dict(report)
+    full["raw_latencies_ms"] = {
+        f"rep{key[0]}|{key[1]}|{key[2]}|c{key[3]}": [round(v, 2) for v in values] for key, values in latencies.items()
+    }
+    out.write_text(json.dumps(full, indent=2) + "\n", encoding="utf-8")
+    print(f"\nwrote {out} (includes raw per-request latencies)", flush=True)
     print(json.dumps(report, indent=2), flush=True)
     return report
 
