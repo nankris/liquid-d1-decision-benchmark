@@ -1,6 +1,6 @@
 # Liquid d1 vs a same-size chat LLM: 800 real decisions
 
-I tested **Liquid AI's d1-3B "decision model"** (open weights, released Oct 2026) against **Qwen2.5-3B-Instruct** (a general chat model of the same size) and a classic **TF-IDF + logistic regression** baseline on four everyday decision tasks. Everything ran locally on an 8-thread CPU, 4-bit quantized, with every call logged.
+I tested **Liquid AI's d1-3B "decision model"** (open weights, released Oct 2026) against **Qwen2.5-3B-Instruct** (a general chat model of the same size) and a classic **TF-IDF + logistic regression** baseline on four everyday decision tasks. Everything ran locally on an 8-thread CPU, 4-bit quantized, with every call logged. Speed was then re-measured on a Colab T4 GPU (spam and routing).
 
 ![Summary](images/hero.png)
 
@@ -15,9 +15,29 @@ I tested **Liquid AI's d1-3B "decision model"** (open weights, released Oct 2026
 
 - **Accuracy:** d1 clearly beats the same-size chat model on 3 of 4 tasks (95% bootstrap CIs don't overlap) and ties on toxicity. d1 and Qwen got zero training examples; TF-IDF was trained on each dataset.
 - **Calibration:** d1's probabilities are honest. Spam ECE 0.014 vs Qwen 0.130 (5-bin ECE on P(spam), as in the calibration chart; `summary.csv` reports a different, top-label ECE); decisions with p<0.2 or p>0.8 (96% of them) were 97.4% correct.
-- **Latency (CPU):** no speed win on a laptop-class CPU. Median d1 vs Qwen: 256 vs 207 ms (spam), 257 vs 284 ms (toxicity), 481 vs 307 ms (routing), 573 vs 991 ms (stars). Five questions in one call cost 2.6x one question, not 5x.
+- **Latency (CPU):** no speed win on a laptop-class CPU (see GPU below for the opposite result). Median d1 vs Qwen: 256 vs 207 ms (spam), 257 vs 284 ms (toxicity), 481 vs 307 ms (routing), 573 vs 991 ms (stars). Five questions in one call cost 2.6x one question, not 5x.
 - **Cost (projection, not a bill):** at Liquid's list price ($0.04 / 1M input tokens) about **$0.003-0.009 per 1,000 decisions**: ~64-145x cheaper than frontier chat models, but only ~3.5x cheaper than budget chat models.
-- **Not tested yet:** Liquid's hosted API (no key) and GPU speed (Colab run coming; results will be added here).
+- **GPU (Colab T4):** on a GPU the picture flips: d1 was **1.75-2x faster** than Qwen at one request at a time (p50 35 vs 72 ms spam, 78 vs 137 ms routing). Details below.
+- **Not tested yet:** Liquid's hosted API (no key).
+
+### GPU (Colab T4)
+
+Same 4-bit GGUFs on a Colab Tesla T4, llama.cpp b11541 `llama-server`, all layers on the GPU (checked by GPU memory), flash attention on, prompt cache off. Two repetitions with alternating model order: 200 + 100 items per task, so latency/throughput rows pool n=300. Zero HTTP errors, parse rate 1.0 everywhere. Raw file: [`results/gpu_t4/d1_gpu_speed_results.json`](results/gpu_t4/d1_gpu_speed_results.json) (protocol in [`colab/README.md`](colab/README.md)).
+
+| One request at a time (c=1) | d1-3B | Qwen2.5-3B | CPU p50, d1 / Qwen |
+|---|---|---|---|
+| Spam p50 / p95 | **35 / 47 ms** | 72 / 91 ms | 256 / 207 ms |
+| Routing p50 / p95 | **78 / 85 ms** | 137 / 151 ms | 481 / 307 ms |
+| Spam requests/s | **27.0** | 13.4 | |
+| Routing requests/s | **12.6** | 7.2 | |
+| Spam accuracy (rep 1, n=200) | **96.5%** | 92.0% | |
+| Routing accuracy (rep 1, n=200) | **98.5%** | 63.5% (letter prompt) | |
+
+- **Speed:** d1 was 2.0x faster on spam and 1.75x on routing (p50). Versus my CPU run, d1 got 6-7x faster on the GPU and Qwen 2-3x. This is end-to-end HTTP latency, not architecture efficiency: d1's prompts are also shorter (69 vs 90 tokens on spam, 174 vs 224 on routing) and Qwen generates up to 4 tokens while d1 does one forward pass.
+- **Accuracy** matches the CPU run for d1 (96.5% / 98.5%). Qwen moved a few points vs CPU (spam 88.5% -> 92.0%, routing 60.0% -> 63.5%), presumably GPU vs CPU numeric differences flipping close calls.
+- **Several questions per request (d1, c=1, 30 routing items):** k = 1/2/3/5 questions took p50 81/105/138/192 ms, i.e. 12.4/18.8/21.5/25.9 decisions/s. Five questions cost 2.4x one question and roughly doubled decisions/s.
+- **Concurrency 4 gave no throughput gain for either model.** With `-np 4` and 4 requests in flight, requests/s stayed flat (d1 routing 12.6 -> 12.0, d1 spam 25.7 -> 23.6 in rep 2, Qwen spam 13.4 -> 14.3, Qwen routing 7.2 -> 7.5) while p50 latency rose 4-4.7x. The first four requests of each c=4 batch mostly finished at the same moment, so the server did batch them; the batch just took about as long as running them one by one. My best explanation: these requests are almost all prompt processing (prefill), which is compute-bound and already keeps the T4 busy at one request, so batching only queues. Not proven; the run didn't capture GPU utilization or server timings. See [issues-found/005](issues-found/005-gpu-concurrency-no-throughput-gain.md).
+- **Outlier:** in rep 1, the first four d1 spam requests at concurrency 4 each took ~13.1 s (max 13,150 ms), all finishing together, after warmup had already run. Likely a one-time CUDA kernel JIT compile (the prebuilt build has no native T4 code) for a batch shape the warmup didn't hit; it didn't recur in rep 2. It drags the pooled d1 spam c=4 throughput down to 11.9 req/s, so I quote rep 2 (23.6 req/s) above. c=1 numbers are unaffected.
 
 ## Charts
 
@@ -27,19 +47,21 @@ I tested **Liquid AI's d1-3B "decision model"** (open weights, released Oct 2026
 | ![Routing confusion](images/confusion_routing.png) | ![Stars](images/rating_scatter.png) |
 | ![Latency](images/latency.png) | ![Multi-question](images/multiq.png) |
 | ![Confidence](images/confidence_hist.png) | ![Cost](images/cost_per_1k.png) |
+| ![GPU latency](images/gpu_latency.png) | ![GPU multi-question](images/gpu_multiq.png) |
 
 ## Repo layout
 
 - `harness/` - data prep, model clients (d1 local/hosted, Qwen, TF-IDF), runner, charts, cost projection, tests
 - `data/` - the exact 200-item eval sets and training splits (from public datasets)
-- `results/` - `summary.csv/json`, `per_item.csv`, `cost_projection.csv`, and `raw/` with every model call
+- `results/` - `summary.csv/json`, `per_item.csv`, `cost_projection.csv`, and `raw/` with every model call; `gpu_t4/` holds the Colab T4 results JSON
 - `images/` - charts and terminal screenshots
-- `colab/` - GPU speed-test assets
+- `colab/` - GPU speed-test assets (`harness/gpu_charts.py` draws the GPU charts)
 - `PENDING_HOSTED.md` - how to run against Liquid's hosted API
 
 ## Honest caveats
 
 - One run, 200 items per task, 4-bit quantized models on CPU. Your numbers will differ.
+- GPU numbers are one Colab T4 session (2 reps), spam and routing only, measured end to end through llama-server.
 - Qwen is scored from its answer's token probabilities; a letter-option prompt hurt it on routing, so a fairer team-name prompt is reported too.
 - Chat-model cost projections reuse Qwen token counts and ignore reasoning tokens, so they are a lower bound.
 - d1 weights are under Liquid's LFM Open License; check it before commercial use.

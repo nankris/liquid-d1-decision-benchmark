@@ -7,6 +7,7 @@ models/
 substack-paste.html
 liquid-d1-draft.pdf
 post.md
+post_changes.md
 notes.md
 *.gguf
 

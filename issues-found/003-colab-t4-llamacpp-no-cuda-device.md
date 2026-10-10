@@ -35,3 +35,8 @@ Download cudart archive and link libs, set LD_LIBRARY_PATH, pip nvidia-*-cu12 fa
 - d1 server loaded (`decision model type: lfm2-d1`, listening) but the run aborted: b11541 at default verbosity does not print `offloaded N/N layers to GPU`, so the strict check from the code review (002 #5) had nothing to match.
 - Fix: if the log line is absent, verify full offload by GPU memory growth >= 90% of the GGUF file size; record which method was used (`offload_check`).
 - Monitoring lesson: Colab output lives in an iframe; the first status checks missed the traceback, so the failed runtime sat idle a few minutes before deletion. ~10-12 min of T4 used.
+
+## Third T4 run (10 Oct, ~6:07-6:17 PM IST): succeeded (code at da59125)
+- Full run completed in 555 s (results JSON written 6:16 PM IST): both models, 2 reps, c=1 and c=4, multi-question. Full offload passed via the GPU-memory check on all 8 server starts; 0 HTTP errors, parse rate 1.0. Results in `results/gpu_t4/d1_gpu_speed_results.json`.
+- Open: the first four d1 spam requests at c=4 (rep 1) each took ~13.1 s (max 13,150 ms) and finished together, even though 5 warmup requests had run. Likely a one-time PTX JIT for a batch shape the warmup didn't hit (no native sm_75 code); rep 2 didn't repeat it. Not confirmed (no timestamped server log). Fix idea: warm up with several prompt lengths at the run's concurrency.
+- Open: c=4 gave no throughput gain for either model; see [005](005-gpu-concurrency-no-throughput-gain.md).
