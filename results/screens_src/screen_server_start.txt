@@ -1,0 +1,14 @@
+$ llama-server -m d1-3B-Q4_K_M.gguf -c 4096 -t 8 -np 1 --port 8081
+
+0.00.001.627 I srv  llama_server: initializing ...
+0.00.009.235 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.009.743 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.011.418 I srv    load_model: loading model 'd1-3B-Q4_K_M.gguf'
+0.01.060.676 I cmn          init: llama threadpool init, n_threads = 8
+0.01.140.764 I srv          init: decision model type: lfm2-d1
+0.01.215.901 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 4096, kv_unified = 'false'
+0.01.219.673 W srv          init: chat template supports preserving reasoning, it is enabled by default (may use more tokens, disable via --no-reasoning-preserve)
+0.01.219.749 I srv  llama_server: model loaded
+0.01.219.755 I srv  llama_server: listening on http://127.0.0.1:8081
+0.05.997.278 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1
+0.05.997.305 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0

@@ -1,0 +1,107 @@
+# d1 decision-model experiments
+
+A sequential CPU evaluation harness comparing Liquid d1-3B, Qwen2.5-3B-Instruct and a TF-IDF/logistic-regression baseline on spam, offensive tweets, customer routing and review ratings. Both local neural models use Q4_K_M quantization. Hosted clients are implemented but are not needed for local experiments.
+
+## Setup
+
+Use Python 3.13 (`python3` on this machine). No torch is required.
+
+```bash
+python3 -m pip install datasets scikit-learn pandas numpy requests matplotlib pillow
+```
+
+If your system Python requires it, add `--break-system-packages`, or use a virtual environment. Dependencies are already installed in the supplied environment.
+
+Download [llama.cpp b11541](https://github.com/ggml-org/llama.cpp/releases/tag/b11541) and the official [Liquid d1 GGUF](https://huggingface.co/LiquidAI/d1-3B-GGUF/tree/main) and [Qwen GGUF](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/tree/main):
+
+```bash
+mkdir -p vendor/llama models
+curl -L --fail https://github.com/ggml-org/llama.cpp/releases/download/b11541/llama-b11541-bin-ubuntu-x64.tar.gz -o /tmp/llama-b11541.tar.gz
+tar -xzf /tmp/llama-b11541.tar.gz -C vendor/llama --strip-components=1
+curl -L --fail https://huggingface.co/LiquidAI/d1-3B-GGUF/resolve/main/d1-3B-Q4_K_M.gguf -o models/d1-3B-Q4_K_M.gguf
+curl -L --fail https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf -o models/qwen2.5-3b-instruct-q4_k_m.gguf
+```
+
+Launch each server in a separate terminal (adjust binary location if using a different release archive):
+
+```bash
+vendor/llama/llama-server -m models/d1-3B-Q4_K_M.gguf --host 127.0.0.1 --port 8081 -t 8 -tb 8 -ngl 0 -np 1 -c 4096
+vendor/llama/llama-server -m models/qwen2.5-3b-instruct-q4_k_m.gguf --host 127.0.0.1 --port 8082 -t 8 -tb 8 -ngl 0 -np 1 -c 4096
+```
+
+These servers are already running in the supplied environment. The d1 server exposes `/v1/systemone`; Qwen exposes `/v1/chat/completions`.
+
+## Prepare and run
+
+Commands work from the repository root. Data preparation defaults to offline Hugging Face cache use. For the initial download on a new machine, use `HF_HUB_OFFLINE=0 python3 harness/prepare_data.py`.
+
+```bash
+python3 harness/prepare_data.py
+python3 harness/run.py --model d1-local --task spam --limit 3
+python3 harness/run.py --model d1-local --all --limit 3
+python3 harness/run.py --model qwen-local --all --limit 3
+OPENBLAS_NUM_THREADS=8 OMP_NUM_THREADS=8 python3 harness/run.py --model tfidf-lr --all --limit 3
+```
+
+`--all` means all four tasks for the selected model. Omit `--limit` for 200 decisions per task. Do not run separate model commands concurrently when measuring CPU latency. TF-IDF fitting is excluded from latency; each prediction is timed individually.
+
+Data selection uses NumPy seed 42 and source split/index IDs. Each evaluation file has 200 rows. Spam has 60 spam/140 ham, with all other source rows for training. Offensive tweets use the test split's rounded natural ratio (56/144 in the cached revision), with the original training split. Routing balances the 11 actual categories at 18–19 each, uses 3,000 other rows for training, and replaces placeholders consistently. The actual dataset label is `SUBSCRIPTION`, not `NEWSLETTER`. Rating has 40 reviews per star and 5,000 randomly selected training reviews. Review text is truncated to at most 1,000 characters including an ellipsis. Train/eval source rows are disjoint; naturally duplicated text in source datasets is not deduplicated. For exact replication, keep the same HF dataset cache/revision and package versions.
+
+Every attempt, including failures, retries and one warmup per active task invocation, is appended to `results/raw/<model>__<task>.jsonl`. Model IDs containing `/` are sanitized for filenames; the original model ID stays in each record. Successful evaluation IDs are skipped on resume; warmups never count as completed evaluation IDs. `--limit 3` always selects the first three dataset rows, even when resuming. HTTP timeout is 300 seconds, with up to three retries after transient errors. HTTP latency excludes parsing and backoff. `valid` requires a valid parsed chat answer and usable option mass; `text_valid`, `parsed_answer`, `invalid`, and `text_only_fallback` retain diagnostics. Predictions use distribution argmax for every model, including rating.
+
+Chat probabilities use only the first generated token's top logprobs, merging case/whitespace variants and renormalizing over answer options. Missing options get zero; zero total mass becomes uniform and invalid. Full response text must itself be an answer token. Hosted chat may fall back to a one-hot parsed answer if logprobs are unavailable, and flags this so it can be distinguished from calibrated probabilities.
+
+```bash
+python3 harness/multiq.py                 # 30 routing items × k=1,2,3,5, plus warmup
+python3 harness/multiq.py --limit 1       # optional local plumbing check
+python3 harness/analyze.py
+python3 harness/charts.py
+python3 harness/render_terminal.py results/summary.txt images/terminal.png --title 'd1 results'
+cat results/summary.txt | python3 harness/render_terminal.py - images/terminal-stdin.png
+```
+
+Multi-question order is shuffled per item with seed 42 and resumes by `(id,k)`. The questions are team, complaint, urgency, refund intent and anger, added in that order. Analysis excludes warmups and uses the last successful record for each ID; `n_errors` counts failed non-warmup attempts, not unique failed items. Invalid successes remain in metrics. Macro F1 includes every task class. ECE uses ten equal-width bins; binary ECE uses P(positive), multiclass ECE uses top-class confidence. Undefined AUC/Spearman is null. Accuracy intervals use 1,000 bootstrap resamples, seed 0.
+
+Rating's primary accuracy, within-one accuracy and MAE use argmax. The report also includes the corresponding metrics for expected score rounded half-up, continuous expected-score MAE, and Spearman between true and expected score. Labels and expected scores are stored 0–4; plotted stars are 1–5.
+
+Analysis writes `results/summary.csv`, `summary.json`, `summary.txt` and `per_item.csv`. Charts use available raw data and annotate actual sample counts for partial runs. They write 200-dpi PNGs under `images/`. Empty input produces empty summaries and no charts. Existing image files are not automatically deleted.
+
+Smoke runs are plumbing checks, not meaningful accuracy estimates. Before the real run, delete the smoke raw logs and any smoke charts, then regenerate empty summaries:
+
+```bash
+rm -f results/raw/*.jsonl
+python3 harness/analyze.py
+python3 harness/charts.py
+```
+
+## Hosted models (optional; paid)
+
+Local commands never call hosted endpoints. Missing API keys cause a clear skip. To run hosted models later, set a key yourself and explicitly select the hosted model:
+
+```bash
+export LIQUID_API_KEY='...'
+python3 harness/run.py --model d1-hosted --task spam --limit 3 --max-calls 4
+# Optional: export LIQUID_MODEL='d1:free'
+export OPENROUTER_API_KEY='...'
+python3 harness/run.py --model openrouter-d1 --task spam --limit 3 --max-calls 4
+# First populate CHAT_PRICES in harness/prices.py with verified USD/M token rates:
+python3 harness/run.py --model openrouter:provider/model --task spam --limit 3 --max-calls 4
+```
+
+Hosted chat refuses to run with unknown prices. Every request, including warmups/retries and logprob fallback requests, counts toward `--max-calls` (default 1,000 per invocation, shared across tasks). A conservative cost reserve is checked **before** each paid call and added to the running estimate; it uses serialized UTF-8 request bytes plus 4,096 tokens of framing allowance, and the maximum output token count. Logged charges use the greater of this reserve, token-based cost and returned `usage.cost`, including failed attempts. Prior logged charges for the model carry across invocations. `MAX_USD` defaults to 2; a request is refused if its estimated spend would cross the cap. This is an estimate based on configured rates, not a provider billing guarantee. Do not delete hosted logs if relying on accumulated spend tracking.
+
+The separate report projection uses observed mean tokens: d1 at the spec's $0.04/M input tokens, assuming comparable local/hosted tokenizer families. It is **not** an observed invoice. Chat projections appear only when `CHAT_PRICES` has that model's rates; that dict is empty by default.
+
+Base URL overrides: `D1_LOCAL_BASE_URL`, `QWEN_LOCAL_BASE_URL`, `LIQUID_BASE_URL`, `OPENROUTER_BASE_URL`. Defaults are in `harness/models.py`; include any provider path prefix, with an optional trailing `/v1`. Add a fixed endpoint via one `REGISTRY` entry. All `openrouter:<model_id>` IDs work without registry edits.
+
+## Files and checks
+
+- `harness/tasks.py`, `prepare_data.py`: shared prompts/criteria and deterministic data preparation.
+- `harness/models.py`, `run.py`, `multiq.py`: clients, TF-IDF baseline, logging, budget guards and experiments.
+- `harness/analyze.py`, `prices.py`, `charts.py`, `render_terminal.py`: metrics, projections and presentation.
+- `harness/common.py`: paths and JSONL helpers.
+- `harness/test_harness.py`: offline checks of parsing, metrics, retry logging and spending guards.
+
+```bash
+python3 -m unittest discover -s harness -p 'test_*.py' -v
+```

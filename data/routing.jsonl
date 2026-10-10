@@ -1,0 +1,200 @@
+{"id": "train:15585", "text": "get ibll #37777", "label": "INVOICE"}
+{"id": "train:3520", "text": "I need assistance to see the termination charges", "label": "CANCEL"}
+{"id": "train:7366", "text": "I call to make a consumer claim against your  business", "label": "FEEDBACK"}
+{"id": "train:12480", "text": "I have to see what options for delivery are there, help me", "label": "DELIVERY"}
+{"id": "train:26533", "text": "assistance seeing if there is anything new on the rebate", "label": "REFUND"}
+{"id": "train:3234", "text": "I do not know what to do to see the withdrawal penalties", "label": "CANCEL"}
+{"id": "train:22606", "text": "is there a way to submit some feedback about a product?", "label": "FEEDBACK"}
+{"id": "train:18914", "text": "i don know what to do to buy some of ur product", "label": "ORDER"}
+{"id": "train:18552", "text": "can uhelp me solve an error with payments", "label": "PAYMENT"}
+{"id": "train:12731", "text": "have a question about the methods for shipment", "label": "DELIVERY"}
+{"id": "train:23359", "text": "y i cannot submit the new shipping address  valid", "label": "SHIPPING"}
+{"id": "train:15886", "text": "i dont know how i can download the invoice from Person Name", "label": "INVOICE"}
+{"id": "train:7214", "text": "help me to file a claim against ur organization", "label": "FEEDBACK"}
+{"id": "train:3496", "text": "I want help seeing the withdrawal charges", "label": "CANCEL"}
+{"id": "train:7995", "text": "wanna check at what time i can reach customer assistance", "label": "CONTACT"}
+{"id": "train:4499", "text": "I want help to give a quick look at the invoice #85632", "label": "INVOICE"}
+{"id": "train:7873", "text": "I need help to make a complaint against your business", "label": "FEEDBACK"}
+{"id": "train:1054", "text": "how to edt order #48213", "label": "ORDER"}
+{"id": "train:8774", "text": "I have to speak to customer assistance, how to do it?", "label": "CONTACT"}
+{"id": "train:25042", "text": "can you help me track order #48213?", "label": "ORDER"}
+{"id": "train:9386", "text": "I try to talk with an assistant", "label": "CONTACT"}
+{"id": "train:25564", "text": "when will I receive ordered #48213 ?", "label": "ORDER"}
+{"id": "train:24197", "text": "I do not know what I need to do to change to the Account Type account", "label": "ACCOUNT"}
+{"id": "train:22954", "text": "I have troubles entering another delivery address", "label": "SHIPPING"}
+{"id": "train:23771", "text": "I have a trouble setting my new shipping address up", "label": "SHIPPING"}
+{"id": "train:19908", "text": "information aboutforgotten pass", "label": "ACCOUNT"}
+{"id": "train:11908", "text": "help to see what delivery methods are available", "label": "DELIVERY"}
+{"id": "train:21396", "text": "can uhelp me informing of problems with sign-up", "label": "ACCOUNT"}
+{"id": "train:22360", "text": "is there an address to leave a comment for a service?", "label": "FEEDBACK"}
+{"id": "train:22594", "text": "need to write a review about ur company how can i do it", "label": "FEEDBACK"}
+{"id": "train:17485", "text": "i want assistance to unsubscribe to the company newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:18580", "text": "I don't know how to notify of an issue with online payment", "label": "PAYMENT"}
+{"id": "train:5228", "text": "i want assitsance to check ur allowed payment modalities", "label": "PAYMENT"}
+{"id": "train:6197", "text": "II need to see your reimbursement policy", "label": "REFUND"}
+{"id": "train:3927", "text": "want assistance giving a quick look at the bill #85632", "label": "INVOICE"}
+{"id": "train:2867", "text": "need assistance with a address update", "label": "SHIPPING"}
+{"id": "train:20689", "text": "want assistance to reset the pin of my account", "label": "ACCOUNT"}
+{"id": "train:15608", "text": "i dont know what to do  to download bill #85632", "label": "INVOICE"}
+{"id": "train:16972", "text": "I have got to unsubscribe to the newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:17239", "text": "help me cancel the subscription to ur newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:3709", "text": "can youhelp me to check the cancellation fee?", "label": "CANCEL"}
+{"id": "train:9824", "text": "I can't understand you, can I chat with a human agent?", "label": "CONTACT"}
+{"id": "train:13958", "text": "correcting info on Account Type aqccount", "label": "ACCOUNT"}
+{"id": "train:16116", "text": "how can I obtain my money back?", "label": "REFUND"}
+{"id": "train:15069", "text": "I need assistance to get my invoice from Person Name", "label": "INVOICE"}
+{"id": "train:7295", "text": "can you help me lodging a reclamation?", "label": "FEEDBACK"}
+{"id": "train:22238", "text": "needhelp submitting some feedback", "label": "FEEDBACK"}
+{"id": "train:8405", "text": "help checking at what time I can call customer support", "label": "CONTACT"}
+{"id": "train:23612", "text": "can you help me submit a different delivery address?", "label": "SHIPPING"}
+{"id": "train:26755", "text": "I do not know how I can see the current status of the refund", "label": "REFUND"}
+{"id": "train:17523", "text": "need help to subscribe to your corporate newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:3569", "text": "where do i see the cancellation penalties", "label": "CANCEL"}
+{"id": "train:3715", "text": "is it possible to check the early termination charges?", "label": "CANCEL"}
+{"id": "train:17943", "text": "want help to inform of an issue with online payments", "label": "PAYMENT"}
+{"id": "train:7010", "text": "help me to lodgea complaint against ur business", "label": "FEEDBACK"}
+{"id": "train:15263", "text": "I lost my bill #37777, will you mail it to me?", "label": "INVOICE"}
+{"id": "train:7831", "text": "can i make a consumer reclamation", "label": "FEEDBACK"}
+{"id": "train:22919", "text": "want help to enter my secondary shipping address", "label": "SHIPPING"}
+{"id": "train:17403", "text": "help me to cancel the subscription to the company newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:14419", "text": "changing data on Account Type account", "label": "ACCOUNT"}
+{"id": "train:17595", "text": "need help to receive your company newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:18112", "text": "I cannot pay, help me informing of damn issues with payments", "label": "PAYMENT"}
+{"id": "train:24628", "text": "changing to Account Type account", "label": "ACCOUNT"}
+{"id": "train:8119", "text": "need to see what hours i can contacy customer assistance", "label": "CONTACT"}
+{"id": "train:5377", "text": "how do I see the allowed payment methods?", "label": "PAYMENT"}
+{"id": "train:18130", "text": "help to notify of an issue with payments", "label": "PAYMENT"}
+{"id": "train:8931", "text": "I want to contact a person", "label": "CONTACT"}
+{"id": "train:22089", "text": "leaving review for your services", "label": "FEEDBACK"}
+{"id": "train:19181", "text": "is it possible to buy some items?", "label": "ORDER"}
+{"id": "train:239", "text": "I want help cancellkng purchase #48213", "label": "ORDER"}
+{"id": "train:3269", "text": "are there early termination penalties", "label": "CANCEL"}
+{"id": "train:12502", "text": "deliveries to Delivery City", "label": "DELIVERY"}
+{"id": "train:16449", "text": "I want ehlp demanding a reimbursement of money", "label": "REFUND"}
+{"id": "train:19101", "text": "I would like to do a purchase, can you help me?", "label": "ORDER"}
+{"id": "train:5709", "text": "I want assisatance seeing the allowed payment options", "label": "PAYMENT"}
+{"id": "train:14960", "text": "send me bull from Person Name", "label": "INVOICE"}
+{"id": "train:3788", "text": "i need assistance seeing the termination fees", "label": "CANCEL"}
+{"id": "train:3247", "text": "how could I see the early termination penalty?", "label": "CANCEL"}
+{"id": "train:17209", "text": "I need help cancelling my subscription to your newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:16913", "text": "help me canceling my subscription to the newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:13621", "text": "i try to check how long it takes forf my product to arrive", "label": "DELIVERY"}
+{"id": "train:17186", "text": "unsubscribe to your company newspetter", "label": "SUBSCRIPTION"}
+{"id": "train:3192", "text": "canuhelp me to see the cancellation penalty", "label": "CANCEL"}
+{"id": "train:6711", "text": "could i see in what cases can i request refundcs", "label": "REFUND"}
+{"id": "train:17276", "text": "can I unsubscribe from the goddamn newsletter?", "label": "SUBSCRIPTION"}
+{"id": "train:17005", "text": "how can I sign up to your corporate nnewsletter?", "label": "SUBSCRIPTION"}
+{"id": "train:24760", "text": "i dont know what i need to do to change to the Account Type account", "label": "ACCOUNT"}
+{"id": "train:2168", "text": "how can I update my bloody address?", "label": "SHIPPING"}
+{"id": "train:3293", "text": "can you help me checking the bloody cancellation penalty?", "label": "CANCEL"}
+{"id": "train:18634", "text": "how do I notify of an issue with payment?", "label": "PAYMENT"}
+{"id": "train:19199", "text": "where to shop some of ur item", "label": "ORDER"}
+{"id": "train:16924", "text": "find information about my subscription to ur newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:17060", "text": "assistance subscribing to the corporate newsleter", "label": "SUBSCRIPTION"}
+{"id": "train:12729", "text": "can i order frlm Delivery City", "label": "DELIVERY"}
+{"id": "train:25830", "text": "wanna see order #48213 status help me", "label": "ORDER"}
+{"id": "train:17626", "text": "information about cancel the company newsletter subscription", "label": "SUBSCRIPTION"}
+{"id": "train:23481", "text": "I need help to submit my delivery address", "label": "SHIPPING"}
+{"id": "train:25841", "text": "I try to see order #48213 status", "label": "ORDER"}
+{"id": "train:2801", "text": "I want to update my shipping address, how to do it?", "label": "SHIPPING"}
+{"id": "train:24154", "text": "can you help me to use the standard profile?", "label": "ACCOUNT"}
+{"id": "train:18078", "text": "i have an question about the payment", "label": "PAYMENT"}
+{"id": "train:26679", "text": "check my refund status", "label": "REFUND"}
+{"id": "train:5287", "text": "assistance to see your available payment options", "label": "PAYMENT"}
+{"id": "train:15", "text": "can you help me cancel purchase #48213?", "label": "ORDER"}
+{"id": "train:12205", "text": "i want help to see what methods for delivery are there", "label": "DELIVERY"}
+{"id": "train:16862", "text": "wanna obtain fucking compensations", "label": "REFUND"}
+{"id": "train:687", "text": "I need help cancelling order #48213", "label": "ORDER"}
+{"id": "train:15441", "text": "I need assistance downloading my invoice #00108", "label": "INVOICE"}
+{"id": "train:24647", "text": "i dont know what i need to do to change to the gold account", "label": "ACCOUNT"}
+{"id": "train:17749", "text": "I want to sign up to the corporate newsletter, how to do it?", "label": "SUBSCRIPTION"}
+{"id": "train:19227", "text": "want assistance earning  something", "label": "ORDER"}
+{"id": "train:23284", "text": "troubles setting my secondary shipping address up", "label": "SHIPPING"}
+{"id": "train:17710", "text": "help cancelling my company newsletter subscription", "label": "SUBSCRIPTION"}
+{"id": "train:8191", "text": "need help to see what hours i can contact customer support", "label": "CONTACT"}
+{"id": "train:7898", "text": "where could I file a consumer claim against your company?", "label": "FEEDBACK"}
+{"id": "train:11907", "text": "do you ship to Delivery City?", "label": "DELIVERY"}
+{"id": "train:7008", "text": "I need help making a claim against your organization", "label": "FEEDBACK"}
+{"id": "train:23443", "text": "there are errors setting up a delivery address", "label": "SHIPPING"}
+{"id": "train:4899", "text": "i do not know what i  have to do to check bill #37777", "label": "INVOICE"}
+{"id": "train:4476", "text": "how can I check bill  #12588?", "label": "INVOICE"}
+{"id": "train:3204", "text": "I have got to see the early exit penalties", "label": "CANCEL"}
+{"id": "train:66", "text": "help me to cancel my  last goddamn purchase", "label": "ORDER"}
+{"id": "train:7574", "text": "file customerr claim", "label": "FEEDBACK"}
+{"id": "train:9780", "text": "i dont know how i can talk to an operator", "label": "CONTACT"}
+{"id": "train:24644", "text": "how to change to the Account Category account?", "label": "ACCOUNT"}
+{"id": "train:9808", "text": "I don't know what to doto speak to someone", "label": "CONTACT"}
+{"id": "train:10018", "text": "open Account Category account", "label": "ACCOUNT"}
+{"id": "train:12314", "text": "how can I see what options for delivery I can choose?", "label": "DELIVERY"}
+{"id": "train:4830", "text": "I do not know what I have to do to look for my bill #12588", "label": "INVOICE"}
+{"id": "train:482", "text": "I have to cancel purchase #48213, can I get some help?", "label": "ORDER"}
+{"id": "train:8546", "text": "can you help me talk to customer assistance ?", "label": "CONTACT"}
+{"id": "train:11714", "text": "i no longer want the premium account help to cancel it", "label": "ACCOUNT"}
+{"id": "train:9057", "text": "I do not know what to do to chat with someone", "label": "CONTACT"}
+{"id": "train:7570", "text": "I need help to file a damn reclamation against your company", "label": "FEEDBACK"}
+{"id": "train:1547", "text": "si it possible to add some products to order #48213", "label": "ORDER"}
+{"id": "train:12453", "text": "deliveries to Delivery City", "label": "DELIVERY"}
+{"id": "train:17108", "text": "how to subscribe to the corporate newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:16175", "text": "I have to receive a rebate of my money", "label": "REFUND"}
+{"id": "train:6394", "text": "i have got to see how long reimbursements take", "label": "REFUND"}
+{"id": "train:2200", "text": "tell me about a shipping address modification", "label": "SHIPPING"}
+{"id": "train:17303", "text": "I cannot receive your corporate newsletter", "label": "SUBSCRIPTION"}
+{"id": "train:16080", "text": "I'd like to obtain an reimbursement of money", "label": "REFUND"}
+{"id": "train:5423", "text": "where can I list the accepted payment options?", "label": "PAYMENT"}
+{"id": "train:13982", "text": "modifying details on Account Type account", "label": "ACCOUNT"}
+{"id": "train:15687", "text": "I do not knowwhat I need to do to get invoice #85632", "label": "INVOICE"}
+{"id": "train:9770", "text": "help me speaking with a goddamn agent", "label": "CONTACT"}
+{"id": "train:13837", "text": "i have got to check how long the shipment takes", "label": "DELIVERY"}
+{"id": "train:3133", "text": "i do not know what i have to do to check the cancellation fe", "label": "CANCEL"}
+{"id": "train:26248", "text": "i need assistance checking my rebate status", "label": "REFUND"}
+{"id": "train:15597", "text": "i do not know what to do to download the invoice #85632", "label": "INVOICE"}
+{"id": "train:15132", "text": "I do not know what to do to get the invoice #37777", "label": "INVOICE"}
+{"id": "train:15976", "text": "where to obtain rebates of my money?", "label": "REFUND"}
+{"id": "train:16301", "text": "I need help to demand a compensation of money", "label": "REFUND"}
+{"id": "train:15967", "text": "I want help to get refunds", "label": "REFUND"}
+{"id": "train:9460", "text": "I need help to speak with a human agent", "label": "CONTACT"}
+{"id": "train:23186", "text": "why I can't set up my delivery address avlid", "label": "SHIPPING"}
+{"id": "train:23439", "text": "there is an error setting my new delivery address up", "label": "SHIPPING"}
+{"id": "train:5021", "text": "I want help seeing your allowed payment modalities", "label": "PAYMENT"}
+{"id": "train:23604", "text": "I am trying to submit my secondary delivery addrerss", "label": "SHIPPING"}
+{"id": "train:20210", "text": "question about the lost password", "label": "ACCOUNT"}
+{"id": "train:12228", "text": "deliverids to Delivery Country", "label": "DELIVERY"}
+{"id": "train:6363", "text": "I need to check how long reimbursements take, help me", "label": "REFUND"}
+{"id": "train:7404", "text": "assistance to file a claim against ur company", "label": "FEEDBACK"}
+{"id": "train:3785", "text": "I'd like tro check the withdrawal fees", "label": "CANCEL"}
+{"id": "train:3113", "text": "i do not nkow how to see the early termination penalty", "label": "CANCEL"}
+{"id": "train:12917", "text": "i try to check how long itg takes for the shipment to arrive", "label": "DELIVERY"}
+{"id": "train:14594", "text": "I have got to edit my bloody user, how could I do it?", "label": "ACCOUNT"}
+{"id": "train:8499", "text": "see what hours customer support available is", "label": "CONTACT"}
+{"id": "train:2969", "text": "what is the fee for canceling the contract?", "label": "CANCEL"}
+{"id": "train:3383", "text": "show me the withdrawal penalties", "label": "CANCEL"}
+{"id": "train:505", "text": "canceling order #48213", "label": "ORDER"}
+{"id": "train:15027", "text": "where do i download my bil #85632", "label": "INVOICE"}
+{"id": "train:3420", "text": "I czn't find the early termination penalties", "label": "CANCEL"}
+{"id": "train:4954", "text": "I want to check the bloody payment options", "label": "PAYMENT"}
+{"id": "train:23686", "text": "assistance to enter my shipping address", "label": "SHIPPING"}
+{"id": "train:7985", "text": "tell me what hours I can reach customer service", "label": "CONTACT"}
+{"id": "train:12127", "text": "can I place an order from Delivery Country?", "label": "DELIVERY"}
+{"id": "train:18829", "text": "what do I need to do to notify of a payment error?", "label": "PAYMENT"}
+{"id": "train:12876", "text": "i have got to see the delivery methods how do i do it", "label": "DELIVERY"}
+{"id": "train:17999", "text": "need assistance reporting a problem with payment", "label": "PAYMENT"}
+{"id": "train:8016", "text": "need help contacting customer service", "label": "CONTACT"}
+{"id": "train:22303", "text": "help leaving a comment about your services", "label": "FEEDBACK"}
+{"id": "train:12126", "text": "what shipment options can I choose?", "label": "DELIVERY"}
+{"id": "train:20134", "text": "can uhelp me retrieving my account pin", "label": "ACCOUNT"}
+{"id": "train:26182", "text": "I have to know if there is anything wrong with the refund", "label": "REFUND"}
+{"id": "train:12685", "text": "deliveries to Delivery Country", "label": "DELIVERY"}
+{"id": "train:18565", "text": "i do not know how i can notify of errors with payment", "label": "PAYMENT"}
+{"id": "train:23340", "text": "i have errors setting up my shipping address", "label": "SHIPPING"}
+{"id": "train:19650", "text": "i do not know what to do to purchase several of ur product", "label": "ORDER"}
+{"id": "train:5294", "text": "how to list ur accepted payment methodd", "label": "PAYMENT"}
+{"id": "train:23027", "text": "trouble submitting the edlivery address", "label": "SHIPPING"}
+{"id": "train:12361", "text": "can i place a damn order from  Delivery Country", "label": "DELIVERY"}
+{"id": "train:3025", "text": "I need help to see the cancellation fee", "label": "CANCEL"}
+{"id": "train:14613", "text": "correcting data on pro account", "label": "ACCOUNT"}
+{"id": "train:22733", "text": "I need assistance to leave feedback about your company", "label": "FEEDBACK"}
+{"id": "train:8044", "text": "can I see at what time I can contact customer support?", "label": "CONTACT"}
+{"id": "train:4375", "text": "look for bill #00108", "label": "INVOICE"}
+{"id": "train:4242", "text": "I need assistance to check my invoice from Person Name", "label": "INVOICE"}
+{"id": "train:25918", "text": "I am waiting for a refnd of Refund Amount dollars", "label": "REFUND"}
+{"id": "train:11615", "text": "where can I get information about Account Type account deletions?", "label": "ACCOUNT"}

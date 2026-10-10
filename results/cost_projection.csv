@@ -1,0 +1,25 @@
+task,model,mean_in_tokens,mean_out_tokens,usd_per_1000,x_vs_d1
+spam,"d1 (hosted, list)",68.5,0.0,0.0027416000000000007,1.0
+spam,gpt-6-luna,89.9,2.0,0.0099855,3.6
+spam,claude-haiku-5.5,89.9,2.0,0.0099855,3.6
+spam,gemini-3.1-flash-lite,89.9,2.0,0.02546375,9.3
+spam,gpt-6.1-sol,89.9,2.0,0.19971,72.8
+spam,claude-opus-5.5,89.9,2.0,0.39942,145.7
+toxic,"d1 (hosted, list)",75.8,0.0,0.0030332000000000002,1.0
+toxic,gpt-6-luna,96.9,2.0,0.010694000000000002,3.5
+toxic,claude-haiku-5.5,96.9,2.0,0.010694000000000002,3.5
+toxic,gemini-3.1-flash-lite,96.9,2.0,0.027235,9.0
+toxic,gpt-6.1-sol,96.9,2.0,0.21388000000000001,70.5
+toxic,claude-opus-5.5,96.9,2.0,0.42776000000000003,141.0
+routing,"d1 (hosted, list)",173.6,0.0,0.0069428,1.0
+routing,gpt-6-luna,223.6,2.0,0.023356000000000002,3.4
+routing,claude-haiku-5.5,223.6,2.0,0.023356000000000002,3.4
+routing,gemini-3.1-flash-lite,223.6,2.0,0.05889,8.5
+routing,gpt-6.1-sol,223.6,2.0,0.46712000000000004,67.3
+routing,claude-opus-5.5,223.6,2.0,0.9342400000000001,134.6
+rating,"d1 (hosted, list)",214.6,0.0,0.0085836,1.0
+rating,gpt-6-luna,226.1,2.0,0.023605000000000004,2.8
+rating,claude-haiku-5.5,226.1,2.0,0.023605000000000004,2.8
+rating,gemini-3.1-flash-lite,226.1,2.0,0.0595125,6.9
+rating,gpt-6.1-sol,226.1,2.0,0.4721,55.0
+rating,claude-opus-5.5,226.1,2.0,0.9442,110.0

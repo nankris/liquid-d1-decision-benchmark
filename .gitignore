@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+vendor/
+models/
+
+# blog drafts (published on Substack, not here)
+substack-paste.html
+liquid-d1-draft.pdf
+post.md
+notes.md
+*.gguf

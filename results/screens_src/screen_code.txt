@@ -1,0 +1,29 @@
+    def body(self, task, text):
+        e = self.endpoint
+        if e.kind == 'decision':
+            body = {'state': text, 'questions': {'answer': task.question()}}
+            if e.model:
+                body['model'] = os.getenv('LIQUID_MODEL', e.model) if self.name == 'd1-hosted' else e.model
+        else:
+            body = {'model': e.model, 'messages': task.messages(text), 'temperature': 0, 'max_tokens': 4}
+            if not self.text_only:
+                body.update(logprobs=True, top_logprobs=20)
+        return body
+
+    def call(self, body):
+        start = time.perf_counter()
+        try:
+            response = self.session.post(self.url, json=body, timeout=(10, 300))
+        except requests.RequestException as exc:
+            raise CallError(str(exc), None, (time.perf_counter() - start) * 1000, transient=True) from exc
+        elapsed = (time.perf_counter() - start) * 1000
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {'text': response.text}
+        if not response.ok:
+            message = f'HTTP {response.status_code}: {payload}'
+            unsupported = self.name.startswith('openrouter:') and response.status_code in (400, 404, 422) and 'logprob' in str(payload).lower()
+            raise CallError(message, payload, elapsed, response.status_code in (408, 425, 429) or response.status_code >= 500, unsupported)
+        return payload, elapsed
+

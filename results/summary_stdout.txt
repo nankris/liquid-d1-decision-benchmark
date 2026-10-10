@@ -1,0 +1,24 @@
+     model    task   n  n_errors  n_invalid  accuracy  macro_f1   ece  latency_p50_ms  latency_p95_ms
+  d1-local  rating 200         0          0     0.705     0.697 0.065         572.548         913.782
+  d1-local routing 200         0          0     0.985     0.985 0.037         480.653         695.125
+  d1-local    spam 200         0          0     0.965     0.958 0.032         255.705         441.185
+  d1-local   toxic 200         0          0     0.810     0.769 0.102         256.615         358.039
+qwen-local  rating 200         0          0     0.495     0.461 0.423         991.199        2090.525
+qwen-local routing 200         0          3     0.600     0.592 0.320         307.089         870.994
+qwen-local    spam 200         0          0     0.885     0.843 0.130         206.818         383.960
+qwen-local   toxic 200         0          0     0.790     0.748 0.184         284.412         547.811
+  tfidf-lr  rating 200         0          0     0.560     0.557 0.185           0.714           1.042
+  tfidf-lr routing 200         0          0     0.995     0.995 0.256           0.448           0.678
+  tfidf-lr    spam 200         0          0     0.900     0.867 0.101           0.468           4.493
+  tfidf-lr   toxic 200         0          0     0.795     0.688 0.093           0.514           0.782
+
+Accuracy CIs: 1,000 bootstrap resamples, seed 0. Warmups excluded.
+
+Hosted cost projection (USD/1,000 decisions):
+   model    task  projected_usd_per_1000
+d1-local  rating                0.008584
+d1-local routing                0.006943
+d1-local    spam                0.002742
+d1-local   toxic                0.003033
+D1 assumes comparable local/hosted tokenizer families; $0.04/M input tokens.
+

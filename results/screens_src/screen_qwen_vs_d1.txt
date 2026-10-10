@@ -1,0 +1,14 @@
+Saved spam evaluation (no rerun)
+Source: results/raw/{d1-local,qwen-local}__spam.jsonl
+Selection: d1 correct, Qwen wrong; highest d1 confidence
+
+Item: train:1227
+SMS: Reply with your name and address and YOU WILL RECEIVE BY POST a weeks completely free accommodation at various global locations www.phb1.com ph:08700435505150p
+True label: spam
+
+d1-3B (open weights, local)
+P(spam): 0.9850959468153831
+
+Qwen2.5-3B-Instruct (chat, local)
+Text answer: 'no'
+P(yes): 0.00038661341859285136

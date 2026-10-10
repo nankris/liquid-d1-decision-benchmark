@@ -1,0 +1,74 @@
+$ curl -sS --max-time 300 http://127.0.0.1:8081/v1/systemone \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "state": "I was charged twice this month and the app keeps crashing when I try to download my invoice. Please fix this today.",
+  "questions": {
+    "team": {
+      "type": "choice",
+      "instructions": "Which team should handle this request?",
+      "criteria": {
+        "billing": "Charges, payments and invoices",
+        "technical": "App crashes and technical errors",
+        "account": "Login and account settings",
+        "shipping": "Delivery and shipping issues"
+      }
+    },
+    "wants_refund": {
+      "type": "noul",
+      "instructions": "Does the customer want a refund?"
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this request?",
+      "criteria": [
+        "Can wait",
+        "Today",
+        "Blocking the customer now"
+      ]
+    }
+  }
+}' \
+  -w '%{stderr}time_total: %{time_total} s\n' \
+  2>/tmp/d1-curl-timing.txt | python3 -m json.tool
+$ cat /tmp/d1-curl-timing.txt
+
+{
+    "model": "d1-3B-Q4_K_M.gguf",
+    "answers": {
+        "team": {
+            "type": "choice",
+            "choice": "billing",
+            "probabilities": {
+                "billing": 0.7183998531386637,
+                "technical": 0.2742202460652261,
+                "account": 0.004403484111769937,
+                "shipping": 0.002976416684340045
+            },
+            "confidence": 0.6245331375182183
+        },
+        "wants_refund": {
+            "type": "noul",
+            "noul": 0.14133464669869364
+        },
+        "urgency": {
+            "type": "score",
+            "score": 1.117944471154329,
+            "legend": {
+                "0": "Can wait",
+                "1": "Today",
+                "2": "Blocking the customer now"
+            },
+            "probabilities": {
+                "0": 0.00875058289642369,
+                "1": 0.8645543630528235,
+                "2": 0.1266950540507527
+            },
+            "confidence": 0.7968315445792353
+        }
+    },
+    "usage": {
+        "input_tokens": 196,
+        "output_tokens": 0
+    }
+}
+time_total: 1.355937 s
