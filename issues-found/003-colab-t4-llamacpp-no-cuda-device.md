@@ -19,3 +19,13 @@
 - Fail fast instead of silently building from source; source build opt-in only (`BUILD_FROM_SOURCE=1`).
 
 **Lesson:** test device detection in a 1-minute smoke cell before committing to the full run, so a failure costs ~1 minute of GPU, not 20.
+
+## Root cause (confirmed by inspection, commit 5963119)
+- The CUDA backend `libggml-cuda.so` is loaded dynamically at startup and needs `libcudart.so.12`, `libcublas.so.12`/`libcublasLt.so.12` and the driver `libcuda.so.1`.
+- The binary tarball ships none of the CUDA 12 runtime libs; they are in a separate 594 MB asset `cudart-llama-b11541-bin-ubuntu-cuda-12.8-x64.tar.gz`. `ldd libggml-cuda.so` shows `libcudart.so.12 => not found`.
+- llama.cpp loads backends silently, so the only symptom was `Available devices: (none)`.
+- The v1 script ran `ldd` on `llama-server` (nothing missing) instead of the backend lib, so it never fetched the cudart archive.
+- The CUDA 13.4 build is wrong for Colab's driver: its PTX is version 9.4, newer than a CUDA 13.0 driver can JIT. The 12.8 build (PTX 8.7) is correct. Neither ships native sm_75 code, so the first start JIT-compiles kernels.
+
+## Fix
+Download cudart archive and link libs, set LD_LIBRARY_PATH, pip nvidia-*-cu12 fallback in a private dir, run server from its own dir, JIT cache + longer first-start timeouts, full diagnostics, fail fast, source build opt-in (`BUILD_FROM_SOURCE=1`).
