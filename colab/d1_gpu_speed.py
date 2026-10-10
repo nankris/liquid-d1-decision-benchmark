@@ -11,7 +11,12 @@ llama-server (d1's /v1/systemone vs Qwen's chat completions), not the
 efficiency of either architecture in isolation. The two requests differ
 in prompt length and in server-side work.
 
-Inference is llama.cpp llama-server b11541 with CUDA. Every server start
+Inference is llama.cpp llama-server b11541 with CUDA: the prebuilt Ubuntu
+CUDA 12.8 binary plus its companion cudart-llama archive (libcudart,
+libcublas, libcublasLt), which the dynamically loaded libggml-cuda.so needs.
+If no CUDA device shows up the script prints ldd and dlopen diagnostics for
+libggml-cuda.so and exits; a source build only runs with BUILD_FROM_SOURCE=1
+(it takes 20+ minutes on Colab's 2 vCPUs). Every server start
 must report full offload ("offloaded N/N layers to GPU") or the run
 aborts. Concurrency 1 runs on a server started with -np 1, concurrency 4
 on a server restarted with -np 4 (2048 context tokens per slot in both).
@@ -59,12 +64,43 @@ except ImportError:
 
 LLAMA_TAG = "b11541"
 LLAMA_RELEASE = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_TAG}"
-# CUDA 12.8 build runs on the Colab driver that advertises CUDA 12.8+ (the
-# April 2026 T4 image reports driver 580 / CUDA 13.0). There is no Ubuntu
-# CUDA 12.4 binary in this release. The companion cudart archive is only
-# downloaded when the system CUDA libraries are not enough.
-CUDA_BIN_URL = f"{LLAMA_RELEASE}/llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"
-CUDA_LIBS_URL = f"{LLAMA_RELEASE}/cudart-llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz"
+# Prebuilt Ubuntu CUDA builds of b11541. Each needs its companion cudart-llama
+# archive: the CUDA backend is a separate libggml-cuda.so that ggml dlopen()s
+# from the llama-server directory at startup, and it links libcudart.so.N,
+# libcublas.so.N (-> libcublasLt.so.N) that are NOT in the binary tarball. If
+# they are missing the dlopen fails silently and `--list-devices` prints
+# "(none)". ldd on llama-server itself does not show this, because the server
+# binary does not link the CUDA backend.
+#
+# Neither build carries SASS for sm_75 (T4); both ship compute_75 PTX that the
+# driver JIT-compiles on first use. The 12.8 build's PTX is ISA 8.7, which the
+# Colab T4 driver (580.x, CUDA 13.0) can JIT. The 13.4 build's PTX is ISA 9.4,
+# newer than a CUDA 13.0 driver can JIT, so 13.4 is only tried when the driver
+# reports CUDA >= 13.4.
+CUDA_FLAVORS = {
+    "12.8": {
+        "min_driver_cuda": (12, 8),
+        "bin_url": f"{LLAMA_RELEASE}/llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "libs_url": f"{LLAMA_RELEASE}/cudart-llama-{LLAMA_TAG}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+        "pip": ["nvidia-cuda-runtime-cu12", "nvidia-cublas-cu12"],
+    },
+    "13.4": {
+        "min_driver_cuda": (13, 4),
+        "bin_url": f"{LLAMA_RELEASE}/llama-{LLAMA_TAG}-bin-ubuntu-cuda-13.4-x64.tar.gz",
+        "libs_url": f"{LLAMA_RELEASE}/cudart-llama-{LLAMA_TAG}-bin-ubuntu-cuda-13.4-x64.tar.gz",
+        "pip": ["nvidia-cuda-runtime", "nvidia-cublas"],
+    },
+}
+CUDA_FLAVOR_ORDER = ("12.8", "13.4")
+# Where the NVIDIA driver's libcuda.so.1 lives on Colab and common images.
+DRIVER_LIB_DIRS = ("/usr/lib64-nvidia", "/usr/local/nvidia/lib64", "/usr/lib/x86_64-linux-gnu", "/usr/lib64")
+# Source build is opt-in: on Colab's 2 vCPUs it takes well over 15 minutes.
+BUILD_FROM_SOURCE = os.environ.get("BUILD_FROM_SOURCE", "") == "1"
+BUILD_TIMEOUT_S = int(os.environ.get("BUILD_TIMEOUT_MIN", "45")) * 60
+# First server start JIT-compiles the sm_75 PTX kernels it touches; allow for it.
+FIRST_LOAD_TIMEOUT_S = 900
+LOAD_TIMEOUT_S = 300
+WARMUP_REQUEST_TIMEOUT_S = 600
 
 # Hugging Face files pinned to a commit. sha256 and size are the LFS values
 # from https://huggingface.co/api/models/<repo>?blobs=true at that commit
@@ -313,8 +349,7 @@ def download(url, dest: Path, min_bytes=1):
 
 def extract_tarball(url, dest: Path):
     marker = dest / ".extracted"
-    server = next(dest.rglob("llama-server"), None) if dest.exists() else None
-    if marker.exists() and server and server.is_file():
+    if marker.exists() and marker.read_text(encoding="utf-8").strip() == url:
         print(f"cached extract {dest}", flush=True)
         return dest
     if dest.exists():
@@ -345,10 +380,31 @@ def so_dirs(root: Path):
     return sorted(found)
 
 
-def missing_libs(binary: Path, env):
-    result = subprocess.run(["ldd", str(binary)], capture_output=True, text=True, env=env)
-    text = (result.stdout or "") + (result.stderr or "")
-    return [line.strip() for line in text.splitlines() if "not found" in line]
+def ldd_report(path: Path, env):
+    try:
+        result = subprocess.run(["ldd", str(path)], capture_output=True, text=True, env=env, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"ldd failed: {exc}"
+    return ((result.stdout or "") + (result.stderr or "")).strip()
+
+
+def missing_libs(path: Path, env):
+    return [line.strip() for line in ldd_report(path, env).splitlines() if "not found" in line]
+
+
+def driver_lib_dirs():
+    """Directories that hold the NVIDIA driver's libcuda.so.1."""
+    dirs = [d for d in DRIVER_LIB_DIRS if (Path(d) / "libcuda.so.1").exists()]
+    try:
+        cache = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        cache = ""
+    for line in cache.splitlines():
+        if "libcuda.so.1" in line and "=>" in line:
+            parent = str(Path(line.split("=>", 1)[1].strip()).parent)
+            if parent not in dirs:
+                dirs.append(parent)
+    return dirs
 
 
 def make_env(lib_dirs):
@@ -357,9 +413,16 @@ def make_env(lib_dirs):
     for directory in lib_dirs:
         if directory and Path(directory).is_dir() and str(directory) not in parts:
             parts.append(str(directory))
-    if env.get("LD_LIBRARY_PATH"):
-        parts.append(env["LD_LIBRARY_PATH"])
+    for existing in (env.get("LD_LIBRARY_PATH") or "").split(":"):
+        if existing and existing not in parts:
+            parts.append(existing)
     env["LD_LIBRARY_PATH"] = ":".join(parts)
+    # The T4 kernels are PTX-JIT compiled on first use: load them lazily and keep
+    # a large persistent JIT cache so later server starts reuse the compiled code.
+    env.setdefault("CUDA_MODULE_LOADING", "LAZY")
+    env["CUDA_CACHE_MAXSIZE"] = str(4 * 1024 ** 3)
+    env.setdefault("CUDA_CACHE_PATH", str(workspace()["llama"] / "cuda-jit-cache"))
+    env.pop("CUDA_CACHE_DISABLE", None)
     return env
 
 
@@ -393,89 +456,213 @@ def gpu_mem_mib():
     return int(out.strip().splitlines()[0])
 
 
-
 def list_devices(binary, env):
     try:
         result = subprocess.run(
             [str(binary), "--list-devices"],
-            capture_output=True, text=True, env=env, timeout=90,
+            capture_output=True, text=True, env=env, timeout=120, cwd=str(Path(binary).parent),
         )
     except subprocess.TimeoutExpired as exc:
-        return False, (exc.stdout or "") + (exc.stderr or "") + "\n(timeout)"
+        return False, str(exc.stdout or "") + str(exc.stderr or "") + "\n(timeout)"
     text = (result.stdout or "") + (result.stderr or "")
-    ok = result.returncode == 0 and "CUDA" in text.upper() and "(none)" not in text
+    devices = text.split("Available devices:", 1)[-1]
+    ok = result.returncode == 0 and "CUDA" in devices.upper() and "(none)" not in devices
     return ok, text
 
 
+def dlopen_probe(lib: Path, env):
+    """dlopen the CUDA backend the way ggml does (RTLD_NOW). ggml loads backends
+    silently, so this is the only place the real loader error shows up."""
+    code = "import ctypes, sys\nctypes.CDLL(sys.argv[1], mode=2)\nprint('dlopen OK')"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(lib)],
+            capture_output=True, text=True, env=env, timeout=120, cwd=str(lib.parent),
+        )
+    except subprocess.TimeoutExpired:
+        return "dlopen probe timed out"
+    text = ((result.stdout or "") + (result.stderr or "")).strip().splitlines()
+    return text[-1] if text else f"exit {result.returncode}"
+
+
+def diagnose(binary: Path, env, devices_text):
+    """Everything needed to debug a failed device detection from the cell output."""
+    cuda_lib = binary.parent / "libggml-cuda.so"
+    print("=" * 72, flush=True)
+    print(f"DIAGNOSTICS: {binary} --list-devices found no CUDA device", flush=True)
+    print(devices_text.strip()[-1500:], flush=True)
+    print(f"LD_LIBRARY_PATH={env.get('LD_LIBRARY_PATH', '')}", flush=True)
+    print(f"libcuda.so.1 found in: {driver_lib_dirs() or 'NOWHERE (driver library missing)'}", flush=True)
+    if cuda_lib.exists():
+        print(f"-- ldd {cuda_lib}", flush=True)
+        print(ldd_report(cuda_lib, env), flush=True)
+        print(f"-- dlopen probe: {dlopen_probe(cuda_lib, env)}", flush=True)
+    else:
+        print(f"{cuda_lib} does not exist; the tarball layout changed.", flush=True)
+    print("=" * 72, flush=True)
+
+
+def pip_cuda_libs(flavor, packages):
+    """Fallback for libcudart/libcublas: NVIDIA's pip wheels, installed into a
+    private --target dir so Colab's own torch/CUDA packages are untouched."""
+    target = workspace()["llama"] / f"pip-cuda-{flavor}"
+    if not any(target.glob("nvidia/**/lib*.so*")):
+        print(f"pip installing {' '.join(packages)} into {target}", flush=True)
+        result = run(
+            [sys.executable, "-m", "pip", "install", "-q", "--no-deps", "--target", str(target), *packages]
+        )
+        if result.returncode != 0:
+            print("pip install of CUDA libs failed", flush=True)
+            return []
+    return [d for d in so_dirs(target / "nvidia")]
+
+
+def prepare_prebuilt(flavor):
+    """Download one prebuilt flavor plus its CUDA runtime libs. Returns (binary, env)."""
+    spec = CUDA_FLAVORS[flavor]
+    llama = workspace()["llama"]
+    tree = extract_tarball(spec["bin_url"], llama / f"cuda-{flavor}")
+    binary = find_llama_server(tree)
+    bindir = binary.parent
+    cuda_lib = bindir / "libggml-cuda.so"
+    if not cuda_lib.exists():
+        raise RuntimeError(f"{cuda_lib} missing from {spec['bin_url']}")
+    # Put cudart/cublas/cublasLt next to libggml-cuda.so: its RUNPATH is $ORIGIN,
+    # so they resolve without relying on LD_LIBRARY_PATH (which is set as well).
+    libs = extract_tarball(spec["libs_url"], llama / f"cudart-{flavor}")
+    lib_dirs = so_dirs(libs)
+    for directory in lib_dirs:
+        for lib in directory.glob("lib*.so*"):
+            link = bindir / lib.name
+            if link.is_symlink() and link.resolve() != lib.resolve():
+                link.unlink()
+            if not link.exists() and not link.is_symlink():
+                link.symlink_to(lib)
+    env = make_env([bindir, *lib_dirs, *driver_lib_dirs()])
+    missing = [m for m in missing_libs(cuda_lib, env) if "libcuda.so" not in m]
+    if missing:
+        print("CUDA backend still has unresolved libs after the cudart archive:", flush=True)
+        print("\n".join(missing), flush=True)
+        env = make_env([bindir, *lib_dirs, *pip_cuda_libs(flavor, spec["pip"]), *driver_lib_dirs()])
+    return binary, env
+
+
+def stream_build(cmd, deadline, log_path):
+    """Run one build step, echo cmake progress, kill it at the deadline."""
+    print("+", " ".join(cmd), flush=True)
+    with open(log_path, "a", encoding="utf-8") as log:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
+        )
+        timer = threading.Timer(max(1, deadline - time.time()), lambda: os.killpg(proc.pid, signal.SIGKILL))
+        timer.start()
+        last_print = 0.0
+        tail = []
+        try:
+            for line in proc.stdout:
+                log.write(line)
+                tail = (tail + [line.rstrip()])[-40:]
+                progress = re.match(r"\[\s*(\d+)%\]", line)
+                if progress and time.time() - last_print > 15:
+                    print(f"  build {progress.group(1)}%  ({line.strip()[:110]})", flush=True)
+                    last_print = time.time()
+            proc.wait()
+        finally:
+            timer.cancel()
+    if time.time() >= deadline and proc.returncode != 0:
+        raise SystemExit(
+            f"Source build exceeded the hard limit of {BUILD_TIMEOUT_S // 60} min and was killed. "
+            f"Raise BUILD_TIMEOUT_MIN or fix the prebuilt binary (see diagnostics above). Log: {log_path}"
+        )
+    if proc.returncode != 0:
+        raise SystemExit(f"Build step failed ({proc.returncode}). Last output:\n" + "\n".join(tail) + f"\nLog: {log_path}")
+
+
 def build_llama_server(cuda_arch="75"):
-    """Source build pinned to llama.cpp b11541 for sm_75 (T4). Slow fallback."""
+    """Opt-in (BUILD_FROM_SOURCE=1) source build of b11541 for sm_75 (T4)."""
     paths = workspace()
     src = paths["llama"] / f"src-{LLAMA_TAG}"
     build = src / "build-cuda"
     binary = build / "bin" / "llama-server"
-    env = make_env(so_dirs(build))
+    env = make_env([binary.parent, *so_dirs(build), *driver_lib_dirs()])
     if binary.exists():
         ok, _text = list_devices(binary, env)
         if ok:
             print(f"reusing source-built {binary}", flush=True)
             return binary, env
+    jobs = str(max(1, os.cpu_count() or 1))
     print(
-        "Prebuilt CUDA llama-server cannot see this GPU. Building b11541 from source "
-        "for sm_75. This often takes 10 minutes and can push the run past 20.",
+        f"BUILD_FROM_SOURCE=1: building llama.cpp {LLAMA_TAG} for sm_{cuda_arch} with -j {jobs}. "
+        f"On Colab (2 vCPUs) this takes 20+ minutes. Hard limit {BUILD_TIMEOUT_S // 60} min.",
         flush=True,
     )
-    if not src.exists():
+    deadline = time.time() + BUILD_TIMEOUT_S
+    log_path = paths["llama"] / "build.log"
+    if not (src / "CMakeLists.txt").exists():
+        if src.exists():
+            shutil.rmtree(src)
         check(["git", "clone", "--depth", "1", "--branch", LLAMA_TAG, "https://github.com/ggml-org/llama.cpp", str(src)])
-    jobs = str(max(1, os.cpu_count() or 2))
-    check(
+    for nvcc_dir in ("/usr/local/cuda/bin",):
+        if Path(nvcc_dir, "nvcc").exists() and nvcc_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = nvcc_dir + ":" + os.environ.get("PATH", "")
+    stream_build(
         [
             "cmake", "-B", str(build), "-S", str(src),
             "-DGGML_CUDA=ON", f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}",
             "-DGGML_NATIVE=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_CURL=OFF",
             "-DCMAKE_BUILD_TYPE=Release",
-        ]
+        ],
+        deadline, log_path,
     )
-    check(["cmake", "--build", str(build), "-j", jobs, "--target", "llama-server"])
+    stream_build(["cmake", "--build", str(build), "-j", jobs, "--target", "llama-server"], deadline, log_path)
     if not binary.exists():
-        found = find_llama_server(build)
-        binary = found
+        binary = find_llama_server(build)
+    env = make_env([binary.parent, *so_dirs(build), *driver_lib_dirs()])
     ok, text = list_devices(binary, env)
     if not ok:
-        raise RuntimeError("Built llama-server still has no CUDA device.\n" + text[-2000:])
+        diagnose(binary, env, text)
+        raise SystemExit("Source-built llama-server still has no CUDA device. See diagnostics above.")
+    print(text.strip(), flush=True)
     return binary, env
+
+
+def no_gpu_exit(reason):
+    raise SystemExit(
+        f"{reason}\nNo CUDA device is usable, so nothing was measured. Not building from source "
+        "automatically (it takes 20+ minutes on Colab's 2 vCPUs). To try it anyway, run "
+        "`import os; os.environ['BUILD_FROM_SOURCE'] = '1'` in a cell first, then rerun."
+    )
 
 
 def ensure_llama_server(cuda):
-    paths = workspace()
-    if cuda < (12, 8):
-        print(
-            f"Driver CUDA is {cuda[0]}.{cuda[1]}, older than the b11541 Ubuntu CUDA 12.8 binary. "
-            "Building from source against this machine's toolkit.",
-            flush=True,
+    flavors = [f for f in CUDA_FLAVOR_ORDER if cuda >= CUDA_FLAVORS[f]["min_driver_cuda"]]
+    forced = os.environ.get("LLAMA_CUDA_FLAVOR")
+    if forced:
+        if forced not in CUDA_FLAVORS:
+            raise SystemExit(f"LLAMA_CUDA_FLAVOR must be one of {list(CUDA_FLAVORS)}")
+        flavors = [forced]
+    if not flavors:
+        reason = (
+            f"Driver CUDA is {cuda[0]}.{cuda[1]}, older than every prebuilt b11541 Ubuntu CUDA "
+            f"build ({', '.join(CUDA_FLAVOR_ORDER)})."
         )
-        return build_llama_server()
-    tree = extract_tarball(CUDA_BIN_URL, paths["llama"] / "cuda-12.8")
-    binary = find_llama_server(tree)
-    lib_dirs = [binary.parent, *so_dirs(tree)]
-    env = make_env(lib_dirs)
-    missing = missing_libs(binary, env)
-    if missing:
-        print("CUDA runtime libs missing from the binary tarball; fetching the cudart archive.", flush=True)
-        print("\n".join(missing[:12]), flush=True)
-        libs = extract_tarball(CUDA_LIBS_URL, paths["llama"] / "cudart-12.8")
-        lib_dirs = [binary.parent, *so_dirs(tree), *so_dirs(libs)]
-        env = make_env(lib_dirs)
-        missing = missing_libs(binary, env)
-        if missing:
-            print("Still missing after cudart:\n" + "\n".join(missing[:12]), flush=True)
+        if BUILD_FROM_SOURCE:
+            print(reason, flush=True)
             return build_llama_server()
-    ok, text = list_devices(binary, env)
-    if not ok:
-        print("Prebuilt llama-server --list-devices did not show CUDA:", flush=True)
-        print(text[-1500:], flush=True)
+        no_gpu_exit(reason)
+    if not driver_lib_dirs():
+        print("warning: libcuda.so.1 (NVIDIA driver library) not found in the usual places.", flush=True)
+    for flavor in flavors:
+        print(f"trying prebuilt llama-server {LLAMA_TAG} CUDA {flavor}", flush=True)
+        binary, env = prepare_prebuilt(flavor)
+        ok, text = list_devices(binary, env)
+        if ok:
+            print(text.strip(), flush=True)
+            return binary, env
+        diagnose(binary, env, text)
+    if BUILD_FROM_SOURCE:
         return build_llama_server()
-    print(text.strip(), flush=True)
-    return binary, env
+    no_gpu_exit(f"Prebuilt llama-server CUDA {'/'.join(flavors)} cannot see the GPU (diagnostics above).")
 
 
 def locate_zip():
@@ -589,13 +776,18 @@ def log_text(path: Path, tail=12000):
     return data if tail is None else data[-tail:]
 
 
-def wait_until_loaded(proc, log_path, timeout=180):
+def wait_until_loaded(proc, log_path, timeout=LOAD_TIMEOUT_S):
     """Readiness is HTTP /health. The C++ server block-buffers stdout when it is
     redirected to a file, so the log is only a secondary signal (stdbuf -oL)."""
-    deadline = time.time() + timeout
+    started = time.time()
+    deadline = started + timeout
+    last_note = started
     while time.time() < deadline:
         if proc.poll() is not None:
             raise RuntimeError(f"llama-server exited {proc.returncode}\n" + log_text(log_path)[-2500:])
+        if time.time() - last_note > 60:
+            print(f"  waiting for llama-server ({int(time.time() - started)}s; first start JIT-compiles CUDA kernels)", flush=True)
+            last_note = time.time()
         try:
             response = requests.get(f"http://{HOST}:{PORT}/health", timeout=2)
             if response.status_code == 200:
@@ -636,6 +828,9 @@ def check_full_offload(log_path, timeout=10):
     return offloaded, total
 
 
+_SERVER_STARTS = {"n": 0}
+
+
 def start_server(binary, env, model_path, alias, n_slots):
     paths = workspace()
     log_path = paths["log"]
@@ -653,10 +848,13 @@ def start_server(binary, env, model_path, alias, n_slots):
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             env=env,
+            cwd=str(Path(binary).parent),
             start_new_session=True,
         )
+        timeout = FIRST_LOAD_TIMEOUT_S if _SERVER_STARTS["n"] == 0 else LOAD_TIMEOUT_S
+        _SERVER_STARTS["n"] += 1
         try:
-            wait_until_loaded(proc, log_path)
+            wait_until_loaded(proc, log_path, timeout)
         except Exception as exc:  # noqa: BLE001 — retry once with flash attention off
             last_error = exc
             stop_server(proc)
@@ -726,12 +924,12 @@ class MalformedResponse(ValueError):
     """2xx response whose body does not have the expected structure."""
 
 
-def post_json(url, body):
+def post_json(url, body, read_timeout=60):
     """Returns (payload, elapsed_ms). A 2xx body that is not JSON comes back as
     payload None so the parser counts it as malformed, not as an HTTP error."""
     started = time.perf_counter()
     try:
-        response = http_session().post(url, json=body, timeout=(10, 60))
+        response = http_session().post(url, json=body, timeout=(10, read_timeout))
     except requests.RequestException as exc:
         raise HttpError(str(exc)) from exc
     elapsed = (time.perf_counter() - started) * 1000
@@ -906,7 +1104,7 @@ def resolve_qwen_model_id():
     return ids[0]
 
 
-def run_jobs(url, bodies, parallel, handle):
+def run_jobs(url, bodies, parallel, handle, read_timeout=60):
     """Send bodies with at most `parallel` in flight. handle(index, payload, elapsed)
     or handle(index, exc, None) runs per request, inside the worker. Returns the real
     elapsed wall-clock seconds for the whole batch (time.perf_counter around it)."""
@@ -916,7 +1114,7 @@ def run_jobs(url, bodies, parallel, handle):
     def one(indexed):
         index, body = indexed
         try:
-            payload, elapsed = post_json(url, body)
+            payload, elapsed = post_json(url, body, read_timeout)
         except Exception as exc:  # noqa: BLE001 — one bad request should not kill the pool
             handle(index, exc, None)
         else:
@@ -937,7 +1135,7 @@ def run_jobs(url, bodies, parallel, handle):
     return time.perf_counter() - started
 
 
-def evaluate(url, bodies, labels, parallel, parse):
+def evaluate(url, bodies, labels, parallel, parse, read_timeout=60):
     """Runs a batch and classifies every request as http_error, malformed,
     unparsed (well-formed but no valid answer) or parsed. Parsing happens inside
     the try, so any parser failure counts as malformed."""
@@ -958,7 +1156,7 @@ def evaluate(url, bodies, labels, parallel, parse):
             record["status"] = "parsed" if pred is not None else "unparsed"
         records[index] = record
 
-    wall = run_jobs(url, bodies, parallel, handle)
+    wall = run_jobs(url, bodies, parallel, handle, read_timeout)
     return records, wall
 
 
@@ -1050,7 +1248,8 @@ def warmup(kind, items, parallel, model_id=None):
     task = TASKS["spam"]
     rows = (items * WARMUP_REQUESTS)[:WARMUP_REQUESTS]
     url, bodies, labels, parse = task_batch(kind, task, rows, model_id)
-    records, wall = evaluate(url, bodies, labels, parallel, parse)
+    # Generous timeout: the first requests may still JIT-compile CUDA kernels.
+    records, wall = evaluate(url, bodies, labels, parallel, parse, WARMUP_REQUEST_TIMEOUT_S)
     ok = sum(1 for r in records if r["status"] != "http_error")
     print(f"warmup {ok}/{len(records)} ok in {wall:.2f}s", flush=True)
     if ok == 0:
@@ -1268,7 +1467,9 @@ def main():
     started = time.perf_counter()
     cuda, gpu = gpu_query()
     binary, env = ensure_llama_server(cuda)
-    version = subprocess.run([str(binary), "--version"], capture_output=True, text=True, env=env)
+    version = subprocess.run(
+        [str(binary), "--version"], capture_output=True, text=True, env=env, cwd=str(Path(binary).parent)
+    )
     version_text = ((version.stdout or "") + (version.stderr or "")).strip().splitlines()
     print(version_text[0] if version_text else "llama-server", flush=True)
     models = download_models()
