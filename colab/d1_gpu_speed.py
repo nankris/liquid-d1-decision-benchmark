@@ -494,6 +494,12 @@ def locate_zip():
     if on_colab():
         path = Path("/content/d1data.zip")
         if not path.is_file():
+            import urllib.request
+            try:
+                urllib.request.urlretrieve("https://raw.githubusercontent.com/nankris/liquid-d1-decision-benchmark/main/colab/d1data.zip", path)
+            except Exception as exc:
+                print("auto-download failed:", exc)
+        if not path.is_file():
             raise RuntimeError(
                 "Upload colab/d1data.zip to /content/d1data.zip "
                 "(Files pane → upload into /content), then run again."
