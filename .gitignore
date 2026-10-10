@@ -9,3 +9,13 @@ liquid-d1-draft.pdf
 post.md
 notes.md
 *.gguf
+
+# local envs, build, and editor junk
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+# large regenerable outputs and training splits (keep small eval jsonl)
